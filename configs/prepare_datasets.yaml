@@ -1,0 +1,29 @@
+paths:
+  data_dir: '/groups/pheno/inar/icecube_kaggle' #adjust the path
+  output_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_test' #adjust the path
+
+data:
+  batch_size: 200000
+  seq_length: 127
+  n_features: 4
+
+pretraining:
+  directory_name: "pretraining"
+  start_at_batch: 1
+  stop_at_batch: 500
+  include_truth: false
+  dtype: 'float16'
+
+validation:
+  directory_name: "validation"
+  start_at_batch: 651
+  stop_at_batch: 655
+  include_truth: true
+  dtype: 'float16'
+
+finetuning:
+  directory_name: "finetuning"
+  start_at_batch: 601
+  stop_at_batch: 605
+  include_truth: true
+  dtype: 'float16'
