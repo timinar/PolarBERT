@@ -1,12 +1,20 @@
 # PolarBERT
-Foundation model for IceCube neutrino telescope.
 
-# Installation
+A foundation model for the IceCube neutrino telescope, implementing masked modeling and transfer learning approaches.
+
+## Features
+- Memory-efficient data handling with memory-mapped datasets
+- Multiple transformer architectures (Standard, Flash Attention, SwiGLU)
+- Two-stage training: pretraining and finetuning
+- Distributed training support with SLURM integration
+- Automated checkpoint management and experiment tracking
+
+## Installation
 ```bash
 pip install -e .
 ```
 
-# Preparing the data
+## Preparing the data
 We use a very efficient memory-mapped dataset. This allows us to load the data very quickly and to use it in a memory-efficient way.
 The downside is that we subsample the long sequences to a fixed sequence length on the preprocessing step.
 
@@ -23,3 +31,62 @@ kaggle competitions download -c icecube-neutrinos-in-deep-ice
 ```bash
 python scripts/prepare_memmaped_data.py --config_path configs/prepare_datasets.yaml
 ```
+
+# Training
+## Pretraining
+Pretrain the model on masked DOM prediction and charge regression:
+
+```bash
+# Local development
+python -m polarbert.pretraining \
+    --config configs/polarbert.yaml \
+    --model_type flash \  # Options: base, flash, swiglu
+    --name my_experiment
+
+# In SLURM job script
+srun python -m polarbert.pretraining \
+    --config configs/polarbert.yaml \
+    --model_type flash \
+    --job_id "${SLURM_JOB_ID}"
+```
+
+Available model architectures:
+
+base: Standard Transformer
+flash: Flash Attention Transformer (recommended)
+swiglu: SwiGLU Activation Transformer
+Finetuning
+Finetune a pretrained model on directional prediction:
+
+Update checkpoint path in configs/finetuning.yaml:
+```yaml
+pretrained:
+  checkpoint_path: '/path/to/your/checkpoint.pth'
+  model_type: 'flash'  # same as pretraining
+  freeze_backbone: false  # whether to freeze pretrained weights
+```
+Start finetuning:
+```bash
+# Local development
+python -m polarbert.finetuning \
+    --config configs/finetuning.yaml \
+    --name my_finetuning
+
+# In SLURM job script
+srun python -m polarbert.finetuning \
+    --config configs/finetuning.yaml \
+    --job_id "${SLURM_JOB_ID}"
+```
+
+
+
+Models and Checkpoints
+Checkpoints are saved under:
+
+Pretraining: checkpoints/<model_name>/
+Finetuning: checkpoints/finetuned_<name>/
+Each training run saves:
+
+Best model based on validation loss
+Last model state
+Final model state

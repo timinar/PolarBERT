@@ -1,0 +1,52 @@
+data:
+  batch_size: 1024
+  train_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_1M_127'
+  val_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_eval_1M_127'
+  train_events: 100000  # Same as notebook
+  val_events: 100000    # Same as notebook
+  pin_memory: true
+  num_workers: 64       # Increased for better performance
+  persistent_workers: true
+
+model:
+  # Base model configuration
+  embedding_dim: 256
+  dom_embed_dim: 128
+  num_heads: 8
+  hidden_size: 1024
+  num_layers: 8
+  mask_prob: 0.0       # Disable masking for finetuning
+
+  # Directional head configuration
+  directional:
+    hidden_size: 1024  # Same as notebook
+
+training:
+  max_epochs: 60       # Same as notebook
+  initial_lr: 1e-4     # Same as notebook
+  max_lr: 7e-4        # Same as notebook
+  weight_decay: 0.0
+  amsgrad: false
+  lr_scheduler: 'onecycle'
+  pct_start: 0.01
+  final_div_factor: 0.133333
+  project: '2024-09-IceCube-finetuning'  # Match notebook project name
+  
+  # Training setup
+  gpus: 1
+  precision: "16-mixed"
+  gradient_clip_val: 1.0
+  val_check_interval: 1.0  # Validate once per epoch
+
+  checkpoint:
+    dirpath: 'checkpoints'
+    save_top_k: 1
+    monitor: 'val/loss'
+    mode: 'min'
+    save_last: true
+    save_final: true
+
+pretrained:
+  model_type: 'flash'
+  checkpoint_path: '/groups/pheno/inar/icecube-pretraining/scripts/checkpoints/flash-mss-100Mevents_240909-033524/final_model.pth'  # Update with your path
+  freeze_backbone: false
