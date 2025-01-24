@@ -1,0 +1,50 @@
+data:
+  batch_size: 1024
+  train_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_100M_127'
+  val_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_eval_1M_127'
+  train_events: 1000000
+  val_events: 10000  # Control validation set size
+  pin_memory: false
+  num_workers: 1
+  persistent_workers: true
+
+model:
+  embedding_dim: 256
+  dom_embed_dim: 128
+  mask_prob: 0.5
+  num_heads: 8
+  hidden_size: 1024  # 768 for swiglu
+  num_layers: 8
+  lambda_charge: 1.0
+  model_name: 'baseline_medium_small'
+
+training:
+  max_epochs: 4
+  val_check_interval: 0.25  # Validate 4 times per epoch (every 25% of the epoch)
+  # or use an absolute number of batches:
+  # val_check_interval: 1000  # Validate every 1000 batches
+  gpus: 1
+  precision: "16-mixed"
+  gradient_clip_val: 1
+  initial_lr: 2e-5
+  max_lr: 5e-4
+  weight_decay: 0.0
+  amsgrad: false
+  lr_scheduler: 'onecycle'
+  
+  # These will be calculated automatically
+  steps_per_epoch: null
+  total_steps: null
+  num_events: null
+  
+  pct_start: 0.01
+  final_div_factor: 0.133333
+  project: 'PolarBERT'
+  
+  checkpoint:
+    dirpath: 'checkpoints'
+    save_top_k: 1
+    monitor: 'val/full_loss'
+    mode: 'min'
+    save_last: true
+    save_final: true

@@ -6,13 +6,47 @@ import copy
 import os
 
 class IceCubeDataset(IterableDataset):
-    """
-    dataset = IceCubeDataset(
-        '/groups/pheno/inar/icecube_kaggle/memmaped_1M_127', 
-        batch_size=2048,
-        transform=lambda x: x.astype(np.float32), 
-        target_transform=lambda x: x.astype(np.float32)
-    )
+    """IceCube event dataset using memory-mapped files for efficient data loading.
+
+    This dataset handles IceCube detector events using memory-mapped numpy arrays
+    for efficient sequential data access with minimal memory overhead.
+
+    Data Structure:
+        - Each event consists of multiple DOM activations
+        - Features are preprocessed and normalized
+        - CLS token is prepended during model processing
+
+    Args:
+        data_dir (str): Directory containing the memory-mapped files
+        batch_size (int): Number of events per batch
+        start (int, optional): Starting event index. Defaults to 0.
+        end (int, optional): Ending event index. Defaults to None (use all events).
+        transform (callable, optional): Transform to apply to features
+        target_transform (callable, optional): Transform to apply to targets
+
+    Returns:
+        tuple: ((x, l), (y, c)) where:
+            x: Event features tensor (batch_size, seq_length, 4)
+                Features:
+                - time: (raw - 1e4) / 3e4
+                - charge: log10(raw) / 3.0
+                - auxiliary: raw - 0.5
+                - sensor_id: raw + 1
+            l: Sequence lengths (batch_size,)
+            y: Target positions (batch_size, seq_length, 2) if available
+            c: Target charges (batch_size,) if available
+
+    Example:
+        >>> dataset = IceCubeDataset(
+        ...     data_dir='path/to/data',
+        ...     batch_size=1024,
+        ...     transform=lambda x: x.astype(np.float32)
+        ... )
+        >>> for (x, l), (y, c) in dataset:
+        ...     # x.shape: (1024, max_seq_len, 4)
+        ...     # l.shape: (1024,)
+        ...     # y.shape: (1024, max_seq_len, 2) if labels exist
+        ...     # c.shape: (1024,)
     """
     def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None):
         self.batch_size = batch_size

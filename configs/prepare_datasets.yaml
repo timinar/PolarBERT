@@ -1,6 +1,6 @@
 paths:
-  data_dir: '/groups/pheno/inar/icecube_kaggle' #adjust the path
-  output_dir: '/groups/pheno/inar/icecube_kaggle/memmaped_test' #adjust the path
+  data_dir: 'path/to/icecube_kaggle' #adjust the path
+  output_dir: 'path/to/icecube_kaggle/memmaped' #adjust the path
 
 data:
   batch_size: 200000
