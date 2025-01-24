@@ -32,6 +32,23 @@ kaggle competitions download -c icecube-neutrinos-in-deep-ice
 python scripts/prepare_memmaped_data.py --config_path configs/prepare_datasets.yaml
 ```
 
+## Configuration
+Example configuration files are provided in `configs/*.example.yaml`. To use them:
+
+1. Copy the example config to create your actual config:
+```bash
+cp configs/polarbert.example.yaml configs/polarbert.yaml
+cp configs/finetuning.example.yaml configs/finetuning.yaml
+```
+
+2. Update the paths and parameters in your config files:
+- Set data directories
+- Adjust model parameters if needed
+- Configure training settings
+- Set pretrained model path for finetuning
+
+Note: Actual config files with paths are excluded from git to avoid sharing system-specific paths.
+
 # Training
 ## Pretraining
 Pretrain the model on masked DOM prediction and charge regression:
