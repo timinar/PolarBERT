@@ -144,11 +144,16 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Optional path for pretrained model checkpoint")
     args = parser.parse_args()
 
     # Load and process config
     config = load_and_process_config(args.config)
     
+    # Override checkpoint_path if provided in command line
+    if args.checkpoint_path is not None:
+        config.setdefault('pretrained', {})['checkpoint_path'] = args.checkpoint_path
+
     # Add model type to config if not present
     if 'model_type' not in config.get('pretrained', {}):
         config.setdefault('pretrained', {})['model_type'] = args.model_type
@@ -177,7 +182,7 @@ def main():
     
     # Setup training
     wandb_logger = WandbLogger(
-        project=config['training'].get('project', '2024-09-IceCube-finetuning'),
+        project=config['training'].get('project', 'PolarBERT-finetuning'),
         name=model_name,
         config=config
     )

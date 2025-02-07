@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
 
-from polarbert.icecube_dataset import IceCubeDataset
+from polarbert.prometheus_dataset import IceCubeDataset
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
 from polarbert.base_model import SimpleTransformer
@@ -86,29 +86,34 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
     return callbacks
 
 def get_dataloaders(config: Dict[str, Any]):
-    transform = lambda x: x.astype(np.float32)
+    def transform(x, l):
+        return x.astype(np.float32), l.astype(np.float32)
+    def target_transform(y, c):
+        y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
+        return y, c.astype(np.float32)
     
     # Training dataset
-    full_train_dataset = IceCubeDataset(
+    full_dataset = IceCubeDataset(
         data_dir=config['data']['train_dir'], 
         batch_size=config['data']['batch_size'],
         transform=transform,
-        target_transform=transform
+        target_transform=target_transform
     )
-    train_dataset = full_train_dataset.slice(0, config['data']['train_events'])
-    del full_train_dataset
+    val_dataset = full_dataset.slice(0, config['data']['val_events'])
+    train_dataset = full_dataset.slice(config['data']['val_events'], config['data']['val_events'] + config['data']['train_events'])
+    del full_dataset
     
-    # Validation dataset with optional subsampling
-    full_val_dataset = IceCubeDataset(
-        data_dir=config['data']['val_dir'], 
-        batch_size=config['data']['batch_size'],
-        transform=transform,
-        target_transform=transform
-    )
+    # # Validation dataset with optional subsampling
+    # full_val_dataset = IceCubeDataset(
+    #     data_dir=config['data']['val_dir'], 
+    #     batch_size=config['data']['batch_size'],
+    #     transform=transform,
+    #     target_transform=transform
+    # )
     
-    val_events = config['data'].get('val_events', None)
-    val_dataset = full_val_dataset.slice(0, val_events) if val_events else full_val_dataset
-    del full_val_dataset
+    # val_events = config['data'].get('val_events', None)
+    # val_dataset = full_val_dataset.slice(0, val_events) if val_events else full_val_dataset
+    # del full_val_dataset
     
     loader_kwargs = {
         'batch_size': None,
