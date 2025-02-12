@@ -10,6 +10,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
+import math
 
 from polarbert.prometheus_dataset import IceCubeDataset
 from polarbert.flash_model import FlashTransformer
@@ -95,7 +96,7 @@ def get_dataloaders(config: Dict[str, Any]):
     # Training dataset
     full_dataset = IceCubeDataset(
         data_dir=config['data']['train_dir'], 
-        batch_size=config['data']['batch_size'],
+        batch_size=config['training']['per_device_batch_size'],
         transform=transform,
         target_transform=target_transform
     )
@@ -136,10 +137,43 @@ def update_training_steps(config: Dict[str, Any], train_loader: DataLoader) -> D
     config['training'].update({
         'steps_per_epoch': steps_per_epoch,
         'total_steps': total_steps,
-        'num_events': total_steps * config['data']['batch_size']
+        'num_events': total_steps * config['training']['batch_size']
     })
     
     return config
+
+def compute_batch_params(config: Dict[str, Any]) -> Dict[str, Any]:
+    logical_batch = config['training']['logical_batch_size']
+    max_per_device = config['data'].get('max_per_device_batch_size', logical_batch)
+    per_device_batch_size = min(max_per_device, logical_batch)
+    gradient_accumulation_steps = math.ceil(logical_batch / per_device_batch_size)
+    actual_batch_size = gradient_accumulation_steps * per_device_batch_size
+    return {
+        'per_device_batch_size': per_device_batch_size,
+        'gradient_accumulation_steps': gradient_accumulation_steps,
+        'batch_size': actual_batch_size,
+    }
+
+SWEEP_PARAMS = {
+    # Architecture
+    'embedding_dim': ('model', 'embedding_dim'),
+    'dom_embed_dim': ('model', 'dom_embed_dim'),
+    'num_heads': ('model', 'num_heads'),
+    'hidden_size': ('model', 'hidden_size'),
+    'num_layers': ('model', 'num_layers'),
+    'lambda_charge': ('model', 'lambda_charge'),
+    # Optimizer
+    'mask_prob': ('training', 'mask_prob'),
+    'max_epochs': ('training', 'max_epochs'),
+    'logical_batch_size': ('training', 'logical_batch_size'),
+    'gradient_clip_val': ('training', 'gradient_clip_val'),
+    'max_lr': ('training', 'max_lr'),
+    'weight_decay': ('training', 'weight_decay'),
+    'amsgrad': ('training', 'amsgrad'),
+    'lr_scheduler': ('training', 'lr_scheduler'),
+    'pct_start': ('training', 'pct_start'),
+    'final_div_factor': ('training', 'final_div_factor'),
+}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -157,6 +191,23 @@ def main():
     model_name = f"{args.name or config['model']['model_name']}_{suffix}"
     config['model']['model_name'] = model_name
 
+    # Setup training
+    torch.set_float32_matmul_precision('high')
+    wandb_logger = WandbLogger(
+        project=config['training']['project'],
+        name=model_name,
+        config=config
+    )
+    
+    # Update config with parameters from wandb sweep
+    for param, (section, key) in SWEEP_PARAMS.items():
+        if param in wandb_logger.experiment.config:
+            config[section][key] = wandb_logger.experiment.config[param]
+
+    # Compute and update batch parameters
+    batch_params = compute_batch_params(config)
+    config['training'].update(batch_params)
+
     # Get data loaders
     train_loader, val_loader = get_dataloaders(config)
     
@@ -168,14 +219,6 @@ def main():
     model = model_class(config)
     print(f"Using {model_name} model")
     print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')
-
-    # Setup training
-    torch.set_float32_matmul_precision('high')
-    wandb_logger = WandbLogger(
-        project=config['training']['project'],
-        name=model_name,
-        config=config
-    )
     
     # Setup training with flexible validation interval
     val_interval = config['training'].get('val_check_interval', 1.0)
