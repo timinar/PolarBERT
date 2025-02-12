@@ -168,10 +168,14 @@ SWEEP_PARAMS = {
     'logical_batch_size': ('training', 'logical_batch_size'),
     'gradient_clip_val': ('training', 'gradient_clip_val'),
     'max_lr': ('training', 'max_lr'),
+    'one_minus_adam_beta1': ('training', 'one_minus_adam_beta1'),
+    'one_minus_adam_beta2': ('training', 'one_minus_adam_beta2'),
+    'adam_eps': ('training', 'adam_eps'),
     'weight_decay': ('training', 'weight_decay'),
     'amsgrad': ('training', 'amsgrad'),
     'lr_scheduler': ('training', 'lr_scheduler'),
     'pct_start': ('training', 'pct_start'),
+    'div_factor': ('training', 'div_factor'),
     'final_div_factor': ('training', 'final_div_factor'),
 }
 
@@ -203,6 +207,12 @@ def main():
     for param, (section, key) in SWEEP_PARAMS.items():
         if param in wandb_logger.experiment.config:
             config[section][key] = wandb_logger.experiment.config[param]
+    
+    # Compute dependent Adam parameters from sweep values
+    if 'one_minus_adam_beta1' in wandb_logger.experiment.config:
+        config['training']['adam_beta1'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta1']
+    if 'one_minus_adam_beta2' in wandb_logger.experiment.config:
+        config['training']['adam_beta2'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta2']
 
     # Compute and update batch parameters
     batch_params = compute_batch_params(config)
@@ -213,6 +223,9 @@ def main():
     
     # Update training steps in config
     config = update_training_steps(config, train_loader)
+    
+    # Ensure the full updated config is logged on W&B before we start training
+    wandb_logger.experiment.config.update(config, allow_val_change=True)
 
     # Initialize model
     model_class, model_name = MODEL_CLASSES[args.model_type]

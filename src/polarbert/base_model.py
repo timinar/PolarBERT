@@ -67,8 +67,11 @@ class SimpleTransformer(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=float(self.config['training']['initial_lr']),
-            betas=(0.9, 0.999),
-            eps=1e-08,
+            betas=(
+                float(self.config['training'].get('adam_beta1', 0.9)),
+                float(self.config['training'].get('adam_beta2', 0.999))
+            ),
+            eps=float(self.config['training'].get('adam_eps', 1e-8)),
             weight_decay=float(self.config['training']['weight_decay']),
             amsgrad=bool(self.config['training'].get('amsgrad', False))
         )
@@ -83,6 +86,7 @@ class SimpleTransformer(pl.LightningModule):
                 max_lr=float(self.config['training']['max_lr']),
                 total_steps=total_steps,
                 pct_start=float(self.config['training']['pct_start']),
+                div_factor=float(self.config['training']['div_factor']),
                 final_div_factor=float(self.config['training']['final_div_factor']),
                 anneal_strategy='cos'
             )
