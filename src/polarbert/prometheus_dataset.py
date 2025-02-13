@@ -93,8 +93,10 @@ class IceCubeDataset(IterableDataset):
         return generator()
     
     def slice(self, start, end):
-        if end is None:
+        if end is None or end > self.x.shape[0]:
             end = self.x.shape[0]
+        assert(end > start)
+        assert(start >= 0)
         slc = copy.copy(self) # Shallow copy
         slc.start = start
         slc.end = end
