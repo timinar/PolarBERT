@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
@@ -14,11 +15,15 @@ from polarbert.pretraining import (
     setup_callbacks,
     get_dataloaders,
     update_training_steps,
-    MODEL_CLASSES
+    compute_batch_params,
+    MODEL_CLASSES,
+    SWEEP_PARAMS,
 )
+from polarbert.base_model import _configure_optimizers
 from polarbert.embedding import IceCubeEmbedding
 from polarbert.flash_model import TransformerBlock
 from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
+
 
 class SimpleTransformerCls(pl.LightningModule):
     def __init__(self, config):
@@ -38,6 +43,7 @@ class SimpleTransformerCls(pl.LightningModule):
         
         return embeddings[:, 0, :]  # Return CLS token
 
+
 class DirectionalHead(pl.LightningModule):
     """Head for directional prediction task."""
     def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
@@ -53,6 +59,7 @@ class DirectionalHead(pl.LightningModule):
         
         # Directional prediction layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
+        # TODO: allow for different activation functions
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 3)
 
@@ -88,31 +95,70 @@ class DirectionalHead(pl.LightningModule):
         loss = self.shared_step(batch, batch_idx)
         self.log('val/loss', loss, prog_bar=True)
         return loss
+    
+    def configure_optimizers(self):
+        return _configure_optimizers(self.config, self.parameters())
+
+    @staticmethod
+    def target_transform(y, c):
+        y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
+        return y, c.astype(np.float32)
+
+
+class EnergyRegressionHead(pl.LightningModule):
+    """Head for energy regression task."""
+    def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
+        super().__init__()
+        self.save_hyperparameters(ignore=['pretrained_model'])
+        self.pretrained_model = pretrained_model
+        self.config = config
+        
+        # Freeze pretrained model if specified
+        if config.get('pretrained', {}).get('freeze_backbone', False):
+            for param in self.pretrained_model.parameters():
+                param.requires_grad = False
+        
+        # Energy regression layers
+        self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 1)
+
+    def forward(self, inp):
+        # Handle the input tuple and get CLS embedding
+        with torch.set_grad_enabled(not self.config.get('pretrained', {}).get('freeze_backbone', False)):
+            cls_embed = self.pretrained_model(inp)
+        
+        x = self.fc1(cls_embed)
+        x = self.relu(x)
+        x = self.fc2(x)
+        
+        return x.view(-1)
+    
+    def shared_step(self, batch, batch_idx):
+        inp, yc = batch
+        y_truth, _ = yc
+        y_pred = self(inp)
+        loss = nn.MSELoss()(y_truth, y_pred)
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        loss = self.shared_step(batch, batch_idx)
+        self.log('train/loss', loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss = self.shared_step(batch, batch_idx)
+        self.log('val/loss', loss, prog_bar=True)
+        return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=float(self.config['training']['initial_lr']),
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=float(self.config['training']['weight_decay']),
-            amsgrad=bool(self.config['training'].get('amsgrad', False))
-        )
+        return _configure_optimizers(self.config, self.parameters())
+        
+    @staticmethod
+    def target_transform(y, c):
+        y = np.log10(y['initial_state_energy'].astype(np.float32))
+        return y, c.astype(np.float32)
 
-        if self.config['training']['lr_scheduler'] == 'constant':
-            return optimizer
-        elif self.config['training']['lr_scheduler'] == 'onecycle':
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=float(self.config['training']['max_lr']),
-                total_steps=int(self.config['training']['total_steps']),
-                pct_start=float(self.config['training']['pct_start']),
-                final_div_factor=float(self.config['training']['final_div_factor']),
-                anneal_strategy='cos'
-            )
-            return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-        else:
-            raise ValueError(f"Unknown scheduler: {self.config['training']['lr_scheduler']}")
 
 def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
@@ -124,7 +170,7 @@ def load_pretrained_model(config: Dict[str, Any]):
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
-    pretrained_state = torch.load(checkpoint_path, map_location='cpu')
+    pretrained_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     
     # Filter state dict to only include embedding and transformer blocks
     filtered_state = {}
@@ -138,8 +184,10 @@ def load_pretrained_model(config: Dict[str, Any]):
     
     return model
 
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('task', type=str, choices=['direction', 'energy'])
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
@@ -150,6 +198,33 @@ def main():
     # Load and process config
     config = load_and_process_config(args.config)
     
+    # Setup model name
+    suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')
+    model_name = f"{args.name or 'finetuned'}_{suffix}"
+    
+    # Setup training
+    torch.set_float32_matmul_precision('high')
+    wandb_logger = WandbLogger(
+        project=config['training'].get('project', 'PolarBERT-finetuning'),
+        name=model_name,
+        config=config
+    )
+    
+    # Update config with parameters from wandb sweep
+    for param, (section, key) in SWEEP_PARAMS.items():
+        if param in wandb_logger.experiment.config:
+            config[section][key] = wandb_logger.experiment.config[param]
+    
+    # Compute dependent Adam parameters from sweep values
+    if 'one_minus_adam_beta1' in wandb_logger.experiment.config:
+        config['training']['adam_beta1'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta1']
+    if 'one_minus_adam_beta2' in wandb_logger.experiment.config:
+        config['training']['adam_beta2'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta2']
+    
+    # Compute and update batch parameters
+    batch_params = compute_batch_params(config)
+    config['training'].update(batch_params)
+    
     # Override checkpoint_path if provided in command line
     if args.checkpoint_path is not None:
         config.setdefault('pretrained', {})['checkpoint_path'] = args.checkpoint_path
@@ -157,10 +232,6 @@ def main():
     # Add model type to config if not present
     if 'model_type' not in config.get('pretrained', {}):
         config.setdefault('pretrained', {})['model_type'] = args.model_type
-    
-    # Setup model name
-    suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')
-    model_name = f"{args.name or 'finetuned'}_{suffix}"
     
     # Setup directional config if not present
     if 'directional' not in config['model']:
@@ -172,20 +243,21 @@ def main():
     pretrained_model = load_pretrained_model(config)
     
     # Initialize finetuning model
-    model = DirectionalHead(config, pretrained_model)
+    if args.task == 'direction':
+        model = DirectionalHead(config, pretrained_model)
+    elif args.task == 'energy':
+        model = EnergyRegressionHead(config, pretrained_model)
+    else:
+        assert False, f'Unsupported task: {args.task}'
     
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config)
+    train_loader, val_loader = get_dataloaders(config, target_transform=model.target_transform)
     
     # Update training steps
     config = update_training_steps(config, train_loader)
-    
-    # Setup training
-    wandb_logger = WandbLogger(
-        project=config['training'].get('project', 'PolarBERT-finetuning'),
-        name=model_name,
-        config=config
-    )
+
+    # Ensure the full updated config is logged on W&B before we start training
+    wandb_logger.experiment.config.update(config, allow_val_change=True)
     
     # Setup training with gradient scaling
     trainer = Trainer(

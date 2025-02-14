@@ -9,7 +9,7 @@ import yaml
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Tuple, Any
 import math
 
 from polarbert.prometheus_dataset import IceCubeDataset
@@ -86,12 +86,12 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
     
     return callbacks
 
-def get_dataloaders(config: Dict[str, Any]):
+def default_target_transform(y, c):
+    return None, c.astype(np.float32)
+
+def get_dataloaders(config: Dict[str, Any], target_transform=default_target_transform) -> Tuple[DataLoader, DataLoader]:
     def transform(x, l):
         return x.astype(np.float32), l.astype(np.float32)
-    def target_transform(y, c):
-        y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
-        return y, c.astype(np.float32)
     
     # Training dataset
     full_dataset = IceCubeDataset(
