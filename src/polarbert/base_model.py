@@ -64,29 +64,44 @@ class SimpleTransformer(pl.LightningModule):
         return loss
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=float(self.config['training']['initial_lr']),
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=float(self.config['training']['weight_decay']),
-            amsgrad=bool(self.config['training'].get('amsgrad', False))
+        return _configure_optimizers(self.config, self.parameters())
+
+
+def _configure_optimizers(config, parameters):
+
+    if config['training']['lr_scheduler'] == 'constant':
+        initial_lr = float(config['training']['initial_lr'])
+    elif config['training']['lr_scheduler'] == 'onecycle':
+        initial_lr = float(config['training']['max_lr']) / float(config['training']['div_factor'])
+    else:
+        raise ValueError(f"Unknown scheduler: {config['training']['lr_scheduler']}")
+    
+    optimizer = torch.optim.AdamW(
+        parameters,
+        lr=initial_lr,
+        betas=(
+            float(config['training'].get('adam_beta1', 0.9)),
+            float(config['training'].get('adam_beta2', 0.999))
+        ),
+        eps=float(config['training'].get('adam_eps', 1e-8)),
+        weight_decay=float(config['training']['weight_decay']),
+        amsgrad=bool(config['training'].get('amsgrad', False))
+    )
+
+    if config['training']['lr_scheduler'] == 'constant':
+        return optimizer
+    elif config['training']['lr_scheduler'] == 'onecycle':
+        # Use the pre-calculated total_steps from config
+        total_steps = config['training']['total_steps']
+        scheduler = OneCycleLR(
+            optimizer,
+            max_lr=float(config['training']['max_lr']),
+            total_steps=total_steps,
+            pct_start=float(config['training']['pct_start']),
+            div_factor=float(config['training']['div_factor']),
+            final_div_factor=float(config['training']['final_div_factor']),
+            anneal_strategy='cos'
         )
-
-        if self.config['training']['lr_scheduler'] == 'constant':
-            return optimizer
-        elif self.config['training']['lr_scheduler'] == 'onecycle':
-            # Use the pre-calculated total_steps from config
-            total_steps = self.config['training']['total_steps']
-            scheduler = OneCycleLR(
-                optimizer,
-                max_lr=float(self.config['training']['max_lr']),
-                total_steps=total_steps,
-                pct_start=float(self.config['training']['pct_start']),
-                final_div_factor=float(self.config['training']['final_div_factor']),
-                anneal_strategy='cos'
-            )
-            return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-        else:
-            raise ValueError(f"Unknown scheduler: {self.config['training']['lr_scheduler']}")
-
+        return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
+    else:
+        assert False

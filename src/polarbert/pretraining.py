@@ -9,9 +9,10 @@ import yaml
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Tuple, Any
+import math
 
-from polarbert.icecube_dataset import IceCubeDataset
+from polarbert.prometheus_dataset import IceCubeDataset
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
 from polarbert.base_model import SimpleTransformer
@@ -85,30 +86,35 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
     
     return callbacks
 
-def get_dataloaders(config: Dict[str, Any]):
-    transform = lambda x: x.astype(np.float32)
+def default_target_transform(y, c):
+    return None, c.astype(np.float32)
+
+def get_dataloaders(config: Dict[str, Any], target_transform=default_target_transform) -> Tuple[DataLoader, DataLoader]:
+    def transform(x, l):
+        return x.astype(np.float32), l.astype(np.float32)
     
     # Training dataset
-    full_train_dataset = IceCubeDataset(
+    full_dataset = IceCubeDataset(
         data_dir=config['data']['train_dir'], 
-        batch_size=config['data']['batch_size'],
+        batch_size=config['training']['per_device_batch_size'],
         transform=transform,
-        target_transform=transform
+        target_transform=target_transform
     )
-    train_dataset = full_train_dataset.slice(0, config['data']['train_events'])
-    del full_train_dataset
+    val_dataset = full_dataset.slice(0, config['data']['val_events'])
+    train_dataset = full_dataset.slice(config['data']['val_events'], config['data']['val_events'] + config['data']['train_events'])
+    del full_dataset
     
-    # Validation dataset with optional subsampling
-    full_val_dataset = IceCubeDataset(
-        data_dir=config['data']['val_dir'], 
-        batch_size=config['data']['batch_size'],
-        transform=transform,
-        target_transform=transform
-    )
+    # # Validation dataset with optional subsampling
+    # full_val_dataset = IceCubeDataset(
+    #     data_dir=config['data']['val_dir'], 
+    #     batch_size=config['data']['batch_size'],
+    #     transform=transform,
+    #     target_transform=transform
+    # )
     
-    val_events = config['data'].get('val_events', None)
-    val_dataset = full_val_dataset.slice(0, val_events) if val_events else full_val_dataset
-    del full_val_dataset
+    # val_events = config['data'].get('val_events', None)
+    # val_dataset = full_val_dataset.slice(0, val_events) if val_events else full_val_dataset
+    # del full_val_dataset
     
     loader_kwargs = {
         'batch_size': None,
@@ -131,10 +137,47 @@ def update_training_steps(config: Dict[str, Any], train_loader: DataLoader) -> D
     config['training'].update({
         'steps_per_epoch': steps_per_epoch,
         'total_steps': total_steps,
-        'num_events': total_steps * config['data']['batch_size']
+        'num_events': total_steps * config['training']['batch_size']
     })
     
     return config
+
+def compute_batch_params(config: Dict[str, Any]) -> Dict[str, Any]:
+    logical_batch = config['training']['logical_batch_size']
+    max_per_device = config['data'].get('max_per_device_batch_size', logical_batch)
+    per_device_batch_size = min(max_per_device, logical_batch)
+    gradient_accumulation_steps = math.ceil(logical_batch / per_device_batch_size)
+    actual_batch_size = gradient_accumulation_steps * per_device_batch_size
+    return {
+        'per_device_batch_size': per_device_batch_size,
+        'gradient_accumulation_steps': gradient_accumulation_steps,
+        'batch_size': actual_batch_size,
+    }
+
+SWEEP_PARAMS = {
+    # Architecture
+    'embedding_dim': ('model', 'embedding_dim'),
+    'dom_embed_dim': ('model', 'dom_embed_dim'),
+    'num_heads': ('model', 'num_heads'),
+    'hidden_size': ('model', 'hidden_size'),
+    'num_layers': ('model', 'num_layers'),
+    'lambda_charge': ('model', 'lambda_charge'),
+    # Optimizer
+    'mask_prob': ('training', 'mask_prob'),
+    'max_epochs': ('training', 'max_epochs'),
+    'logical_batch_size': ('training', 'logical_batch_size'),
+    'gradient_clip_val': ('training', 'gradient_clip_val'),
+    'max_lr': ('training', 'max_lr'),
+    'one_minus_adam_beta1': ('training', 'one_minus_adam_beta1'),
+    'one_minus_adam_beta2': ('training', 'one_minus_adam_beta2'),
+    'adam_eps': ('training', 'adam_eps'),
+    'weight_decay': ('training', 'weight_decay'),
+    'amsgrad': ('training', 'amsgrad'),
+    'lr_scheduler': ('training', 'lr_scheduler'),
+    'pct_start': ('training', 'pct_start'),
+    'div_factor': ('training', 'div_factor'),
+    'final_div_factor': ('training', 'final_div_factor'),
+}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -152,18 +195,6 @@ def main():
     model_name = f"{args.name or config['model']['model_name']}_{suffix}"
     config['model']['model_name'] = model_name
 
-    # Get data loaders
-    train_loader, val_loader = get_dataloaders(config)
-    
-    # Update training steps in config
-    config = update_training_steps(config, train_loader)
-
-    # Initialize model
-    model_class, model_name = MODEL_CLASSES[args.model_type]
-    model = model_class(config)
-    print(f"Using {model_name} model")
-    print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')
-
     # Setup training
     torch.set_float32_matmul_precision('high')
     wandb_logger = WandbLogger(
@@ -171,6 +202,36 @@ def main():
         name=model_name,
         config=config
     )
+    
+    # Update config with parameters from wandb sweep
+    for param, (section, key) in SWEEP_PARAMS.items():
+        if param in wandb_logger.experiment.config:
+            config[section][key] = wandb_logger.experiment.config[param]
+    
+    # Compute dependent Adam parameters from sweep values
+    if 'one_minus_adam_beta1' in wandb_logger.experiment.config:
+        config['training']['adam_beta1'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta1']
+    if 'one_minus_adam_beta2' in wandb_logger.experiment.config:
+        config['training']['adam_beta2'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta2']
+
+    # Compute and update batch parameters
+    batch_params = compute_batch_params(config)
+    config['training'].update(batch_params)
+
+    # Get data loaders
+    train_loader, val_loader = get_dataloaders(config)
+    
+    # Update training steps in config
+    config = update_training_steps(config, train_loader)
+    
+    # Ensure the full updated config is logged on W&B before we start training
+    wandb_logger.experiment.config.update(config, allow_val_change=True)
+
+    # Initialize model
+    model_class, model_name = MODEL_CLASSES[args.model_type]
+    model = model_class(config)
+    print(f"Using {model_name} model")
+    print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')
     
     # Setup training with flexible validation interval
     val_interval = config['training'].get('val_check_interval', 1.0)

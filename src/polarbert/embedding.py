@@ -6,7 +6,7 @@ class IceCubeEmbedding(nn.Module):
         super().__init__()
         embedding_dim = config['model']['embedding_dim']
         dom_embed_dim = config['model']['dom_embed_dim']
-        self.mask_prob = config['model']['mask_prob']
+        self.mask_prob = config['training']['mask_prob']
         num_doms = 5160
         self.dom_embedding = nn.Embedding(num_doms + 2, dom_embed_dim)
         self.features_embedding = nn.Linear(3, embedding_dim - dom_embed_dim)
