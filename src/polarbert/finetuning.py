@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from polarbert.pretraining import (
     load_and_process_config,
@@ -46,13 +46,12 @@ class SimpleTransformerCls(pl.LightningModule):
 
 class DirectionalHead(pl.LightningModule):
     """Head for directional prediction task."""
-    def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
+    def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
         super().__init__()
         self.save_hyperparameters(ignore=['pretrained_model'])
-        self.pretrained_model = pretrained_model
         self.config = config
-        
-        # Freeze pretrained model if specified
+        # Initialize a new pretrained model if none is provided
+        self.pretrained_model = pretrained_model or SimpleTransformerCls(config)
         if config.get('pretrained', {}).get('freeze_backbone', False):
             for param in self.pretrained_model.parameters():
                 param.requires_grad = False
@@ -107,12 +106,12 @@ class DirectionalHead(pl.LightningModule):
 
 class EnergyRegressionHead(pl.LightningModule):
     """Head for energy regression task."""
-    def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
+    def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
         super().__init__()
         self.save_hyperparameters(ignore=['pretrained_model'])
-        self.pretrained_model = pretrained_model
         self.config = config
-        
+        # Initialize a new pretrained model if none is provided
+        self.pretrained_model = pretrained_model or SimpleTransformerCls(config)
         # Freeze pretrained model if specified
         if config.get('pretrained', {}).get('freeze_backbone', False):
             for param in self.pretrained_model.parameters():
