@@ -128,7 +128,7 @@ def get_dataloaders(
             data_dir=config['data']['val_dir'], 
             batch_size=override_batch_size if override_batch_size is not None else config['training']['per_device_batch_size'],
             transform=transform,
-            target_transform=transform
+            target_transform=target_transform
         )
         val_dataset = full_val_dataset.slice(0, val_events)
     else:
