@@ -186,8 +186,12 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Optional path for pretrained model checkpoint")
     args = parser.parse_args()
+
+    if args.dataset_type == 'kaggle' and args.task != 'direction':
+        raise ValueError("Kaggle dataset only contains fine-tuning targets for directional reconstruction")
 
     # Load and process config
     config = load_and_process_config(args.config)
@@ -245,7 +249,7 @@ def main():
         assert False, f'Unsupported task: {args.task}'
     
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config, target_transform=model.target_transform)
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, target_transform=model.target_transform)
     
     # Update training steps
     config = update_training_steps(config, train_loader)
