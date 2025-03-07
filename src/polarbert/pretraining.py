@@ -9,7 +9,7 @@ import yaml
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple, Any, Optional, Callable
 import math
 
 from polarbert.flash_model import FlashTransformer
@@ -87,6 +87,14 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
 
 def default_transform(x, l):
     return x.astype(np.float32), l.astype(np.float32)
+
+def add_random_time_offset(std: float) -> Callable:
+    def _add_random_time_offset(x, l):
+        time_offset = np.random.normal(0, std, (x.shape[0], 1))
+        x = x.copy().astype(np.float32)
+        x[:,:,0] += time_offset
+        return x, l.astype(np.float32)
+    return _add_random_time_offset
 
 def default_target_transform(y, c):
     return None, c.astype(np.float32)
@@ -204,6 +212,7 @@ def main():
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'])
+    parser.add_argument("--random_time_offset", type=float, default=None)
     args = parser.parse_args()
 
     # Load and process config
@@ -238,7 +247,11 @@ def main():
     config['training'].update(batch_params)
 
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type)
+    if args.random_time_offset is not None:
+        transform = add_random_time_offset(args.random_time_offset)
+    else:
+        transform = default_transform
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform)
     
     # Update training steps in config
     config = update_training_steps(config, train_loader)

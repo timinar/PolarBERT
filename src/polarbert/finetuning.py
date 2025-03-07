@@ -19,6 +19,8 @@ from polarbert.pretraining import (
     compute_batch_params,
     MODEL_CLASSES,
     SWEEP_PARAMS,
+    default_transform,
+    add_random_time_offset,
 )
 from polarbert.base_model import _configure_optimizers
 from polarbert.embedding import IceCubeEmbedding
@@ -187,6 +189,7 @@ def main():
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
+    parser.add_argument("--random_time_offset", type=float, default=None)
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Optional path for pretrained model checkpoint")
     args = parser.parse_args()
 
@@ -249,7 +252,11 @@ def main():
         assert False, f'Unsupported task: {args.task}'
     
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, target_transform=model.target_transform)
+    if args.random_time_offset is not None:
+        transform = add_random_time_offset(args.random_time_offset)
+    else:
+        transform = default_transform
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform, target_transform=model.target_transform)
     
     # Update training steps
     config = update_training_steps(config, train_loader)
