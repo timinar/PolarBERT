@@ -8,7 +8,8 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from abc import abstractmethod
 
 from polarbert.pretraining import (
     load_and_process_config,
@@ -18,6 +19,8 @@ from polarbert.pretraining import (
     compute_batch_params,
     MODEL_CLASSES,
     SWEEP_PARAMS,
+    default_transform,
+    add_random_time_offset,
 )
 from polarbert.base_model import _configure_optimizers
 from polarbert.embedding import IceCubeEmbedding
@@ -42,20 +45,47 @@ class SimpleTransformerCls(pl.LightningModule):
             embeddings = block(embeddings, padding_mask)
         
         return embeddings[:, 0, :]  # Return CLS token
+    
 
-
-class DirectionalHead(pl.LightningModule):
-    """Head for directional prediction task."""
-    def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
+class PredictionHead(pl.LightningModule):
+    """Generic head for multiple downstream tasks."""
+    @abstractmethod
+    def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
         super().__init__()
         self.save_hyperparameters(ignore=['pretrained_model'])
-        self.pretrained_model = pretrained_model
         self.config = config
-        
-        # Freeze pretrained model if specified
+        # Initialize a new pretrained model if none is provided
+        self.pretrained_model = pretrained_model or SimpleTransformerCls(config)
         if config.get('pretrained', {}).get('freeze_backbone', False):
             for param in self.pretrained_model.parameters():
                 param.requires_grad = False
+
+    @abstractmethod
+    def forward(self, inp):
+        pass
+
+    @abstractmethod
+    def shared_step(self, batch, batch_idx):
+        pass
+    
+    def training_step(self, batch, batch_idx):
+        loss = self.shared_step(batch, batch_idx)
+        self.log('train/loss', loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss = self.shared_step(batch, batch_idx)
+        self.log('val/loss', loss, prog_bar=True)
+        return loss
+    
+    def configure_optimizers(self):
+        return _configure_optimizers(self.config, self.parameters())
+
+
+class DirectionalHead(PredictionHead):
+    """Head for directional prediction task."""
+    def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
+        super().__init__(config, pretrained_model)
         
         # Directional prediction layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
@@ -86,37 +116,16 @@ class DirectionalHead(pl.LightningModule):
         loss = angular_dist_score_unit_vectors(y_truth, y_pred, epsilon=1e-4)
         return loss
 
-    def training_step(self, batch, batch_idx):
-        loss = self.shared_step(batch, batch_idx)
-        self.log('train/loss', loss, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss = self.shared_step(batch, batch_idx)
-        self.log('val/loss', loss, prog_bar=True)
-        return loss
-    
-    def configure_optimizers(self):
-        return _configure_optimizers(self.config, self.parameters())
-
     @staticmethod
     def target_transform(y, c):
         y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
         return y, c.astype(np.float32)
 
 
-class EnergyRegressionHead(pl.LightningModule):
+class EnergyRegressionHead(PredictionHead):
     """Head for energy regression task."""
-    def __init__(self, config: Dict[str, Any], pretrained_model: nn.Module):
-        super().__init__()
-        self.save_hyperparameters(ignore=['pretrained_model'])
-        self.pretrained_model = pretrained_model
-        self.config = config
-        
-        # Freeze pretrained model if specified
-        if config.get('pretrained', {}).get('freeze_backbone', False):
-            for param in self.pretrained_model.parameters():
-                param.requires_grad = False
+    def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
+        super().__init__(config, pretrained_model)
         
         # Energy regression layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
@@ -140,19 +149,6 @@ class EnergyRegressionHead(pl.LightningModule):
         y_pred = self(inp)
         loss = nn.MSELoss()(y_truth, y_pred)
         return loss
-
-    def training_step(self, batch, batch_idx):
-        loss = self.shared_step(batch, batch_idx)
-        self.log('train/loss', loss, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss = self.shared_step(batch, batch_idx)
-        self.log('val/loss', loss, prog_bar=True)
-        return loss
-
-    def configure_optimizers(self):
-        return _configure_optimizers(self.config, self.parameters())
         
     @staticmethod
     def target_transform(y, c):
@@ -164,6 +160,10 @@ def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
     # Initialize new model for finetuning
     model = SimpleTransformerCls(config)
+
+    if config['pretrained']['checkpoint_path'].strip().lower() == 'new':
+        print("Training from scratch")
+        return model
     
     # Load pretrained weights from the full model
     checkpoint_path = Path(config['pretrained']['checkpoint_path'])
@@ -192,8 +192,13 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
-    parser.add_argument("--checkpoint_path", type=str, default=None, help="Optional path for pretrained model checkpoint")
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
+    parser.add_argument("--random_time_offset", type=float, default=None)
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     args = parser.parse_args()
+
+    if args.dataset_type == 'kaggle' and args.task != 'direction':
+        raise ValueError("Kaggle dataset only contains fine-tuning targets for directional reconstruction")
 
     # Load and process config
     config = load_and_process_config(args.config)
@@ -251,7 +256,11 @@ def main():
         assert False, f'Unsupported task: {args.task}'
     
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config, target_transform=model.target_transform)
+    if args.random_time_offset is not None:
+        transform = add_random_time_offset(args.random_time_offset)
+    else:
+        transform = default_transform
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform, target_transform=model.target_transform)
     
     # Update training steps
     config = update_training_steps(config, train_loader)

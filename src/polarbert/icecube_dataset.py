@@ -112,15 +112,13 @@ class IceCubeDataset(IterableDataset):
                 l = self.l[idx:idx+self.batch_size]
                 
                 if self.transform:
-                    x = self.transform(x)
-                    l = self.transform(l)
+                    x, l = self.transform(x, l)
                 
                 if self.has_labels:
                     y = self.y[idx:idx+self.batch_size,:]
                     c = self.c[idx:idx+self.batch_size]
                     if self.target_transform:
-                        y = self.target_transform(y)
-                        c = self.target_transform(c)
+                        y, c = self.target_transform(y, c)
                     yield (x, l), (y, c)
                 else:
                     yield (x, l), None

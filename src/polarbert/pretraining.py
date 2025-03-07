@@ -9,10 +9,9 @@ import yaml
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, Optional, Callable
 import math
 
-from polarbert.prometheus_dataset import IceCubeDataset
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
 from polarbert.base_model import SimpleTransformer
@@ -86,35 +85,62 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
     
     return callbacks
 
+def default_transform(x, l):
+    return x.astype(np.float32), l.astype(np.float32)
+
+def add_random_time_offset(std: float) -> Callable:
+    def _add_random_time_offset(x, l):
+        time_offset = np.random.normal(0, std, (x.shape[0], 1))
+        x = x.copy().astype(np.float32)
+        x[:,:,0] += time_offset
+        return x, l.astype(np.float32)
+    return _add_random_time_offset
+
 def default_target_transform(y, c):
     return None, c.astype(np.float32)
 
-def get_dataloaders(config: Dict[str, Any], target_transform=default_target_transform) -> Tuple[DataLoader, DataLoader]:
-    def transform(x, l):
-        return x.astype(np.float32), l.astype(np.float32)
+def get_dataloaders(
+        config: Dict[str, Any],
+        dataset_type: str,
+        transform=default_transform,
+        target_transform=default_target_transform,
+        override_batch_size: Optional[int]=None,
+    ) -> Tuple[DataLoader, DataLoader]:
+
+    if dataset_type == 'prometheus':
+        from polarbert.prometheus_dataset import IceCubeDataset
+    elif dataset_type == 'kaggle':
+        from polarbert.icecube_dataset import IceCubeDataset
+    else:
+        assert False, f"Unknown dataset type: {dataset_type}"
     
-    # Training dataset
     full_dataset = IceCubeDataset(
-        data_dir=config['data']['train_dir'], 
-        batch_size=config['training']['per_device_batch_size'],
+        data_dir=config['data']['train_dir'],
+        batch_size=override_batch_size if override_batch_size is not None else config['training']['per_device_batch_size'],
         transform=transform,
         target_transform=target_transform
     )
-    val_dataset = full_dataset.slice(0, config['data']['val_events'])
-    train_dataset = full_dataset.slice(config['data']['val_events'], config['data']['val_events'] + config['data']['train_events'])
-    del full_dataset
-    
-    # # Validation dataset with optional subsampling
-    # full_val_dataset = IceCubeDataset(
-    #     data_dir=config['data']['val_dir'], 
-    #     batch_size=config['data']['batch_size'],
-    #     transform=transform,
-    #     target_transform=transform
-    # )
-    
-    # val_events = config['data'].get('val_events', None)
-    # val_dataset = full_val_dataset.slice(0, val_events) if val_events else full_val_dataset
-    # del full_val_dataset
+    train_events = config['data'].get('train_events', None)
+    val_events = config['data'].get('val_events', None)
+
+    if dataset_type == 'prometheus':
+        if val_events is None:
+            raise ValueError("Number of validation events must be specified for the Prometheus dataset")
+        val_dataset = full_dataset.slice(0, val_events)
+        train_dataset = full_dataset.slice(val_events, val_events + train_events) if train_events else full_dataset.slice(val_events, None)
+    elif dataset_type == 'kaggle':
+        # Training dataset
+        train_dataset = full_dataset.slice(0, train_events)
+        # Validation dataset with optional subsampling
+        full_val_dataset = IceCubeDataset(
+            data_dir=config['data']['val_dir'], 
+            batch_size=override_batch_size if override_batch_size is not None else config['training']['per_device_batch_size'],
+            transform=transform,
+            target_transform=target_transform
+        )
+        val_dataset = full_val_dataset.slice(0, val_events)
+    else:
+        assert False
     
     loader_kwargs = {
         'batch_size': None,
@@ -185,6 +211,8 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'])
+    parser.add_argument("--random_time_offset", type=float, default=None)
     args = parser.parse_args()
 
     # Load and process config
@@ -219,7 +247,11 @@ def main():
     config['training'].update(batch_params)
 
     # Get data loaders
-    train_loader, val_loader = get_dataloaders(config)
+    if args.random_time_offset is not None:
+        transform = add_random_time_offset(args.random_time_offset)
+    else:
+        transform = default_transform
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform)
     
     # Update training steps in config
     config = update_training_steps(config, train_loader)
