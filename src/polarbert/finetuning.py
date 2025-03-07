@@ -160,6 +160,10 @@ def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
     # Initialize new model for finetuning
     model = SimpleTransformerCls(config)
+
+    if config['pretrained']['checkpoint_path'].strip().lower() == 'new':
+        print("Training from scratch")
+        return model
     
     # Load pretrained weights from the full model
     checkpoint_path = Path(config['pretrained']['checkpoint_path'])
@@ -190,7 +194,7 @@ def main():
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
     parser.add_argument("--random_time_offset", type=float, default=None)
-    parser.add_argument("--checkpoint_path", type=str, default=None, help="Optional path for pretrained model checkpoint")
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     args = parser.parse_args()
 
     if args.dataset_type == 'kaggle' and args.task != 'direction':
