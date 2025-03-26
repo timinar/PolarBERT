@@ -3,11 +3,12 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.callbacks import LearningRateMonitor, Callback
 import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
+import schedulefree
 
 from polarbert.pretraining import (
     load_and_process_config,
@@ -19,6 +20,34 @@ from polarbert.pretraining import (
 from polarbert.embedding import IceCubeEmbedding
 from polarbert.flash_model import TransformerBlock
 from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
+
+
+class ScheduleFreeOptimizerCallback(Callback):
+    """Callback to handle train/eval mode of Schedule-Free optimizer."""
+    def on_train_start(self, trainer, pl_module):
+        if hasattr(pl_module, 'optimizers'):
+            optimizer = pl_module.optimizers()
+            if hasattr(optimizer, 'train'):
+                optimizer.train()
+                
+    def on_validation_start(self, trainer, pl_module):
+        if hasattr(pl_module, 'optimizers'):
+            optimizer = pl_module.optimizers()
+            if hasattr(optimizer, 'eval'):
+                optimizer.eval()
+    
+    def on_validation_end(self, trainer, pl_module):
+        if hasattr(pl_module, 'optimizers'):
+            optimizer = pl_module.optimizers()
+            if hasattr(optimizer, 'train'):
+                optimizer.train()
+    
+    def on_test_start(self, trainer, pl_module):
+        if hasattr(pl_module, 'optimizers'):
+            optimizer = pl_module.optimizers()
+            if hasattr(optimizer, 'eval'):
+                optimizer.eval()
+
 
 class SimpleTransformerCls(pl.LightningModule):
     def __init__(self, config):
@@ -37,6 +66,7 @@ class SimpleTransformerCls(pl.LightningModule):
             embeddings = block(embeddings, padding_mask)
         
         return embeddings[:, 0, :]  # Return CLS token
+
 
 class DirectionalHead(pl.LightningModule):
     """Head for directional prediction task."""
@@ -90,29 +120,18 @@ class DirectionalHead(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
+        # Use Schedule-Free optimizer instead of regular AdamW
+        optimizer = schedulefree.AdamWScheduleFree(
             self.parameters(),
             lr=float(self.config['training']['initial_lr']),
+            weight_decay=float(self.config['training']['weight_decay']),
             betas=(0.9, 0.999),
             eps=1e-08,
-            weight_decay=float(self.config['training']['weight_decay']),
-            amsgrad=bool(self.config['training'].get('amsgrad', False))
         )
+        
+        # Schedule-Free doesn't need a scheduler
+        return optimizer
 
-        if self.config['training']['lr_scheduler'] == 'constant':
-            return optimizer
-        elif self.config['training']['lr_scheduler'] == 'onecycle':
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=float(self.config['training']['max_lr']),
-                total_steps=int(self.config['training']['total_steps']),
-                pct_start=float(self.config['training']['pct_start']),
-                final_div_factor=float(self.config['training']['final_div_factor']),
-                anneal_strategy='cos'
-            )
-            return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-        else:
-            raise ValueError(f"Unknown scheduler: {self.config['training']['lr_scheduler']}")
 
 def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
@@ -139,6 +158,7 @@ def load_pretrained_model(config: Dict[str, Any]):
     
     return model
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
@@ -156,7 +176,7 @@ def main():
     
     # Setup model name
     suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')
-    model_name = f"{args.name or 'finetuned'}_{suffix}"
+    model_name = f"{args.name or 'sf_finetuned'}_{suffix}"
     
     # Setup directional config if not present
     if 'directional' not in config['model']:
@@ -183,12 +203,13 @@ def main():
         config=config
     )
     
-    # Setup training with gradient scaling
+    # Setup training with gradient scaling and Schedule-Free optimizer callback
     trainer = Trainer(
         max_epochs=config['training']['max_epochs'],
         callbacks=[
             *setup_callbacks(config, model_name),
-            pl.callbacks.LearningRateMonitor(logging_interval='step')
+            ScheduleFreeOptimizerCallback(),  # Add our custom callback
+            LearningRateMonitor(logging_interval='step')
         ],
         accelerator='gpu',
         devices=config['training']['gpus'],
@@ -197,11 +218,12 @@ def main():
         logger=wandb_logger,
         val_check_interval=config['training'].get('val_check_interval', 1.0),
         enable_model_summary=True,
-        deterministic=False,  # Add this for better performance
-        gradient_clip_algorithm='norm',  # Add this for better stability
+        deterministic=False,  # For better performance
+        gradient_clip_algorithm='norm',  # For better stability
     )
 
     trainer.fit(model, train_loader, val_loader)
+
 
 if __name__ == '__main__':
     main()

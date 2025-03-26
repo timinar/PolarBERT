@@ -5,7 +5,7 @@ data:
   train_events: 100000
   val_events: 100000
   pin_memory: true
-  num_workers: 64
+  num_workers: 1
   persistent_workers: true
 
 model:

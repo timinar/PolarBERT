@@ -5,7 +5,7 @@ data:
   train_events: 100000  # Same as notebook
   val_events: 100000    # Same as notebook
   pin_memory: true
-  num_workers: 64       # Increased for better performance
+  num_workers: 1       # Increased for better performance
   persistent_workers: true
 
 model:
@@ -22,7 +22,7 @@ model:
     hidden_size: 1024  # Same as notebook
 
 training:
-  max_epochs: 60       # Same as notebook
+  max_epochs: 10       # Same as notebook
   initial_lr: 1e-4     # Same as notebook
   max_lr: 7e-4        # Same as notebook
   weight_decay: 0.0

@@ -47,6 +47,8 @@ cp configs/finetuning.example.yaml configs/finetuning.yaml
 - Configure training settings
 - Set pretrained model path for finetuning
 
+Notice that the dataloader has been tested with `num_workers: 1`. We recommend using this setting to avoid potential issues.
+
 Note: Actual config files with paths are excluded from git to avoid sharing system-specific paths.
 
 # Training
