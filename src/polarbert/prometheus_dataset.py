@@ -6,47 +6,13 @@ import copy
 import os
 
 class IceCubeDataset(IterableDataset):
-    """IceCube event dataset using memory-mapped files for efficient data loading.
-
-    This dataset handles IceCube detector events using memory-mapped numpy arrays
-    for efficient sequential data access with minimal memory overhead.
-
-    Data Structure:
-        - Each event consists of multiple DOM activations
-        - Features are preprocessed and normalized
-        - CLS token is prepended during model processing
-
-    Args:
-        data_dir (str): Directory containing the memory-mapped files
-        batch_size (int): Number of events per batch
-        start (int, optional): Starting event index. Defaults to 0.
-        end (int, optional): Ending event index. Defaults to None (use all events).
-        transform (callable, optional): Transform to apply to features
-        target_transform (callable, optional): Transform to apply to targets
-
-    Returns:
-        tuple: ((x, l), (y, c)) where:
-            x: Event features tensor (batch_size, seq_length, 4)
-                Features:
-                - time: (raw - 1e4) / 3e4
-                - charge: log10(raw) / 3.0
-                - auxiliary: raw - 0.5
-                - sensor_id: raw + 1
-            l: Sequence lengths (batch_size,)
-            y: Target positions (batch_size, seq_length, 2) if available
-            c: Target charges (batch_size,) if available
-
-    Example:
-        >>> dataset = IceCubeDataset(
-        ...     data_dir='path/to/data',
-        ...     batch_size=1024,
-        ...     transform=lambda x: x.astype(np.float32)
-        ... )
-        >>> for (x, l), (y, c) in dataset:
-        ...     # x.shape: (1024, max_seq_len, 4)
-        ...     # l.shape: (1024,)
-        ...     # y.shape: (1024, max_seq_len, 2) if labels exist
-        ...     # c.shape: (1024,)
+    """
+    dataset = IceCubeDataset(
+        '/groups/pheno/inar/icecube_kaggle/memmaped_1M_127', 
+        batch_size=2048,
+        transform=lambda x: x.astype(np.float32), 
+        target_transform=lambda x: x.astype(np.float32)
+    )
     """
     def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None):
         self.batch_size = batch_size
@@ -82,10 +48,12 @@ class IceCubeDataset(IterableDataset):
             self.y = np.memmap(
                 os.path.join(data_dir, 'y.npy'), mode='r',
                 shape=tuple(memmap_props['y']['shape']),
-                dtype=memmap_props['y']['dtype'],
+                dtype=[tuple(dt) for dt in memmap_props['y']['dtype']],
             )
+            self.labels = [field_name for field_name, _ in memmap_props['y']['dtype']]
         else:
             self.y = None
+            self.labels = None
             
         if end is None:
             end = self.x.shape[0]
@@ -115,7 +83,7 @@ class IceCubeDataset(IterableDataset):
                     x, l = self.transform(x, l)
                 
                 if self.has_labels:
-                    y = self.y[idx:idx+self.batch_size,:]
+                    y = self.y[idx:idx+self.batch_size]  # remove second dimension
                     c = self.c[idx:idx+self.batch_size]
                     if self.target_transform:
                         y, c = self.target_transform(y, c)
@@ -125,8 +93,10 @@ class IceCubeDataset(IterableDataset):
         return generator()
     
     def slice(self, start, end):
-        if end is None:
+        if end is None or end > self.x.shape[0]:
             end = self.x.shape[0]
+        assert(end > start)
+        assert(start >= 0)
         slc = copy.copy(self) # Shallow copy
         slc.start = start
         slc.end = end

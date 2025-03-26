@@ -1,0 +1,54 @@
+data:
+  max_per_device_batch_size: 1024
+  train_dir: '/groups/hep/jlt/prometheus_data/memmaped_pulses'
+  #val_dir: '/groups/hep/jlt/prometheus_data/memmaped_pulses'
+  train_events: 358235
+  val_events: 40000  # Control validation set size
+  pin_memory: false
+  num_workers: 1
+  persistent_workers: true
+
+model:
+  embedding_dim: 256
+  dom_embed_dim: 128
+  num_heads: 8
+  hidden_size: 1024  # 768 for swiglu
+  num_layers: 8
+  lambda_charge: 1.0
+  model_name: 'tuned_medium_small'
+
+training:
+  mask_prob: 0.27
+  max_epochs: 80
+  logical_batch_size: 320
+  val_check_interval: 1.0  # Validate every epoch
+  # or use an absolute number of batches:
+  # val_check_interval: 1000  # Validate every 1000 batches
+  gpus: 1
+  precision: "16-mixed"
+  gradient_clip_val: 2.0
+  max_lr: 2.2e-3
+  adam_beta1: 0.92
+  adam_beta2: 0.9998
+  adam_eps: 3e-7
+  weight_decay: 0.014
+  amsgrad: false
+  lr_scheduler: 'onecycle'
+  
+  # These will be calculated automatically
+  steps_per_epoch: null
+  total_steps: null
+  num_events: null
+  
+  pct_start: 0.0045
+  div_factor: 25.0
+  final_div_factor: 1e4
+  project: 'PolarBERT-results'
+  
+  checkpoint:
+    dirpath: 'checkpoints/results/pretrained_medium_small-80ep'
+    save_top_k: 1
+    monitor: 'val/full_loss'
+    mode: 'min'
+    save_last: true
+    save_final: true
