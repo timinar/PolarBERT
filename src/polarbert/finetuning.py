@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 from abc import abstractmethod
+from warnings import warn
 
 from polarbert.pretraining import (
     load_and_process_config,
@@ -115,11 +116,20 @@ class DirectionalHead(PredictionHead):
         y_truth = angles_to_unit_vector(y[:,0], y[:,1])
         loss = angular_dist_score_unit_vectors(y_truth, y_pred, epsilon=1e-4)
         return loss
-
+    
     @staticmethod
     def target_transform(y, c):
+        warn('DirectionalHead.target_transform is deprecated and will be removed in future versions. Use target_transform_prometheus instead.', DeprecationWarning)
+        return DirectionalHead.target_transform_prometheus(y, c)
+
+    @staticmethod
+    def target_transform_prometheus(y, c):
         y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
         return y, c.astype(np.float32)
+
+    @staticmethod
+    def target_transform_kaggle(y, c):
+        return y.astype(np.float32), c.astype(np.float32)
 
 
 class EnergyRegressionHead(PredictionHead):
@@ -149,11 +159,20 @@ class EnergyRegressionHead(PredictionHead):
         y_pred = self(inp)
         loss = nn.MSELoss()(y_truth, y_pred)
         return loss
-        
+    
     @staticmethod
     def target_transform(y, c):
+        warn('EnergyRegressionHead.target_transform is deprecated and will be removed in future versions. Use target_transform_prometheus instead.', DeprecationWarning)
+        return EnergyRegressionHead.target_transform_prometheus(y, c)
+        
+    @staticmethod
+    def target_transform_prometheus(y, c):
         y = np.log10(y['initial_state_energy'].astype(np.float32))
         return y, c.astype(np.float32)
+
+    @staticmethod
+    def target_transform_kaggle(y, c):
+        raise(ValueError("Kaggle dataset does not contain energy targets"))
 
 
 def load_pretrained_model(config: Dict[str, Any]):
@@ -254,13 +273,21 @@ def main():
         model = EnergyRegressionHead(config, pretrained_model)
     else:
         assert False, f'Unsupported task: {args.task}'
+
+    # Select the right target transform based on the dataset type
+    if args.dataset_type == 'kaggle':
+        target_transform = model.target_transform_kaggle
+    elif args.dataset_type == 'prometheus':
+        target_transform = model.target_transform_prometheus
+    else:
+        assert False
     
     # Get data loaders
     if args.random_time_offset is not None:
         transform = add_random_time_offset(args.random_time_offset)
     else:
         transform = default_transform
-    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform, target_transform=model.target_transform)
+    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform, target_transform=target_transform)
     
     # Update training steps
     config = update_training_steps(config, train_loader)
