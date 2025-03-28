@@ -1,17 +1,16 @@
 data:
-  batch_size: 1024
+  max_per_device_batch_size: 1024 # Maximum batch size that fits on the GPU
   train_dir: '/path/to/train/data'
   val_dir: '/path/to/val/data'
-  train_events: 1000000
-  val_events: 10000
+  train_events: 10000000
+  val_events: 200000
   pin_memory: false
-  num_workers: 1
+  num_workers: 1 # Should remain 1 when using an IterableDataset
   persistent_workers: true
 
 model:
   embedding_dim: 256
   dom_embed_dim: 128
-  mask_prob: 0.5
   num_heads: 8
   hidden_size: 1024
   num_layers: 8
@@ -19,14 +18,18 @@ model:
   model_name: 'baseline_medium'
 
 training:
-  max_epochs: 4
-  val_check_interval: 0.25
+  mask_prob: 0.25
+  max_epochs: 1
+  logical_batch_size: 200 # Batch size used for training (will use gradient accumulation if necessary)
+  val_check_interval: 0.1
   gpus: 1
   precision: "16-mixed"
-  gradient_clip_val: 1
-  initial_lr: 2e-5
-  max_lr: 5e-4
-  weight_decay: 0.0
+  gradient_clip_val: 2.0
+  max_lr: 3e-3
+  adam_beta1: 0.85
+  adam_beta2: 0.9998
+  adam_eps: 1e-7
+  weight_decay: 0.02
   amsgrad: false
   lr_scheduler: 'onecycle'
   
@@ -34,8 +37,9 @@ training:
   total_steps: null      # Auto-calculated
   num_events: null       # Auto-calculated
   
-  pct_start: 0.01
-  final_div_factor: 0.133333
+  pct_start: 0.2
+  div_factor: 25.0
+  final_div_factor: 1e4
   project: 'PolarBERT'
   
   checkpoint:

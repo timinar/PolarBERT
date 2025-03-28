@@ -20,7 +20,7 @@ The downside is that we subsample the long sequences to a fixed sequence length 
 
 
 1) Download the data from the kaggle [IceCube competition](https://www.kaggle.com/competitions/icecube-neutrinos-in-deep-ice/data)
-ans save it to `<kagle data path>`.\
+ans save it to `<kaggle data path>`.\
 It is convenient to use the kaggle API to download the data (see the details [here](https://github.com/Kaggle/kaggle-api#api-credentials)):
 ```bash
 kaggle competitions download -c icecube-neutrinos-in-deep-ice
@@ -59,13 +59,15 @@ Pretrain the model on masked DOM prediction and charge regression:
 # Local development
 python -m polarbert.pretraining \
     --config configs/polarbert.yaml \
-    --model_type flash \  # Options: base, flash, swiglu
+    --model_type flash \ # Options: base, flash, swiglu
+    --dataset_type kaggle \ # Options: kaggle, prometheus
     --name my_experiment
 
 # In SLURM job script
 srun python -m polarbert.pretraining \
     --config configs/polarbert.yaml \
     --model_type flash \
+    --dataset_type kaggle \
     --job_id "${SLURM_JOB_ID}"
 ```
 
@@ -80,7 +82,7 @@ Finetune a pretrained model on directional prediction:
 Update checkpoint path in configs/finetuning.yaml:
 ```yaml
 pretrained:
-  checkpoint_path: '/path/to/your/checkpoint.pth'
+  checkpoint_path: '/path/to/your/checkpoint.pth' # or 'new' to train from scratch
   model_type: 'flash'  # same as pretraining
   freeze_backbone: false  # whether to freeze pretrained weights
 ```
@@ -88,12 +90,15 @@ Start finetuning:
 ```bash
 # Local development
 python -m polarbert.finetuning \
+    direction \ # Options: direction, energy (Prometheus-only)
     --config configs/finetuning.yaml \
+    --dataset_type kaggle \
     --name my_finetuning
 
 # In SLURM job script
 srun python -m polarbert.finetuning \
     --config configs/finetuning.yaml \
+    --dataset_type kaggle \
     --job_id "${SLURM_JOB_ID}"
 ```
 
