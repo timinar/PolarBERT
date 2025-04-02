@@ -57,10 +57,11 @@ class SimpleTransformer(pl.LightningModule):
         self.log('val/full_loss', full_loss, prog_bar=True)
         return full_loss
     
-    def masked_prediction_loss(self, logits, target_dom_ids, mask, padding_mask):
+    def masked_prediction_loss(self, logits, target_dom_ids, mask, padding_mask, eps=1e-8):
         mask = mask & ~padding_mask
-        loss = F.cross_entropy(logits.flatten(0, 1), target_dom_ids.flatten(), reduction='none')
-        loss = (loss * mask.flatten()).sum() / (mask.sum() + 1e-8)
+        loss = F.cross_entropy(logits.permute(0, 2, 1), target_dom_ids, reduction='none')
+        loss = (loss * mask).sum(axis=1) / (mask.sum(axis=1) + eps)
+        loss = loss.mean()
         return loss
     
     def configure_optimizers(self):
