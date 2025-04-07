@@ -190,6 +190,9 @@ def load_pretrained_model(config: Dict[str, Any]):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
     pretrained_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+    if 'state_dict' in pretrained_state: # PyTorch Lightning checkpoints contain extra data in addition to the state dict
+        pretrained_state = pretrained_state['state_dict']
+    assert 'transformer.layers.0.linear1.weight' in pretrained_state, "State dict does not contain the expected keys. Check the checkpoint format."
     
     # Filter state dict to only include embedding and transformer blocks
     filtered_state = {}
