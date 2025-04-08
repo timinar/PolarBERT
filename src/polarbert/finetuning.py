@@ -241,6 +241,10 @@ def main():
     for param, (section, key) in SWEEP_PARAMS.items():
         if param in wandb_logger.experiment.config:
             config[section][key] = wandb_logger.experiment.config[param]
+    if 'prediction_head_hidden_size' in wandb_logger.experiment.config:
+        if 'directional' not in config['model']:
+            config['model']['directional'] = {}
+        config['model']['directional']['hidden_size'] = wandb_logger.experiment.config['prediction_head_hidden_size']
     
     # Compute dependent Adam parameters from sweep values
     if 'one_minus_adam_beta1' in wandb_logger.experiment.config:
