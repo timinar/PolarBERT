@@ -11,14 +11,18 @@ class SimpleTransformer(pl.LightningModule):
         super().__init__()
         self.config = config
         self.embedding = IceCubeEmbedding(config, masking=True)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config['model']['embedding_dim'],
-            nhead=config['model']['num_heads'],
-            dim_feedforward=config['model']['hidden_size'],
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config['model']['num_layers'])
+        
+        # Skip transformer creation if the flag is set
+        if not hasattr(self, '_skip_transformer') or not self._skip_transformer:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=config['model']['embedding_dim'],
+                nhead=config['model']['num_heads'],
+                dim_feedforward=config['model']['hidden_size'],
+                batch_first=True,
+                norm_first=True
+            )
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config['model']['num_layers'])
+            
         num_doms = 5160
         self.unembedding = nn.Linear(config['model']['embedding_dim'], num_doms + 1)
         self.charge_prediction = nn.Linear(config['model']['embedding_dim'], 1)

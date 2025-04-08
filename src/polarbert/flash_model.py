@@ -74,6 +74,8 @@ class TransformerBlock(nn.Module):
 
 class FlashTransformer(SimpleTransformer):
     def __init__(self, config):
+        # Set flag to skip transformer creation in parent class
+        self._skip_transformer = True
         super().__init__(config)
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
