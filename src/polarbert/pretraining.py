@@ -166,6 +166,14 @@ def update_training_steps(config: Dict[str, Any], train_loader: DataLoader) -> D
         'num_events': total_steps * config['training']['batch_size']
     })
     
+    # If warm_up_steps is provided, calculate pct_start based on total_steps
+    warm_up_steps = config['training'].get('warm_up_steps')
+    if warm_up_steps is not None:
+        # Calculate pct_start as the ratio of warm_up_steps to total_steps
+        pct_start = min(1.0, warm_up_steps / total_steps)
+        config['training']['pct_start'] = pct_start
+        print(f"Using warm_up_steps: {warm_up_steps}, calculated pct_start: {pct_start:.4f}")
+    
     return config
 
 def compute_batch_params(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -270,7 +278,7 @@ def main():
     
     trainer = Trainer(
         max_epochs=config['training']['max_epochs'],
-        callbacks=setup_callbacks(config, model_name),
+        callbacks=setup_callbacks(config, config['model']['model_name']),
         accelerator='gpu',
         devices=config['training']['gpus'],
         precision=config['training']['precision'],

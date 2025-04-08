@@ -33,11 +33,16 @@ training:
   amsgrad: false
   lr_scheduler: 'onecycle'
   
+  # Warm-up configuration
+  # If warm_up_steps is set, pct_start will be calculated as warm_up_steps / total_steps
+  # Otherwise, the fixed pct_start value below will be used
+  warm_up_steps: null  # Number of steps for learning rate warm-up
+  pct_start: 0.2       # Percentage of training for warm-up when warm_up_steps is not provided
+  
   steps_per_epoch: null  # Auto-calculated
   total_steps: null      # Auto-calculated
   num_events: null       # Auto-calculated
   
-  pct_start: 0.2
   div_factor: 25.0
   final_div_factor: 1e4
   project: 'PolarBERT'

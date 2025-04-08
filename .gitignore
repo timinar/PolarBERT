@@ -2,6 +2,12 @@ checkpoints/
 wandb/
 evaluation_results/
 
+# Configs with real paths
+configs/*.yaml
+!configs/*.example.yaml
+!configs/prepare_datasets.yaml
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -165,6 +171,4 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Configs with real paths
-configs/*.yaml
-!configs/*.example.yaml
+
