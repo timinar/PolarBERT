@@ -1,11 +1,13 @@
 checkpoints/
 wandb/
 evaluation_results/
+logs/
 
 # Configs with real paths
 configs/*.yaml
 !configs/*.example.yaml
 !configs/prepare_datasets.yaml
+scripts/*.sh
 
 
 # Byte-compiled / optimized / DLL files
