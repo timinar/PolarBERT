@@ -227,7 +227,8 @@ def main():
     
     # Setup model name
     suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')
-    model_name = f"{args.name or 'finetuned'}_{suffix}"
+    model_name = f"{args.name or config['model']['model_name'] or 'finetuned'}_{suffix}"
+    config['model']['model_name'] = model_name
     
     # Setup training
     torch.set_float32_matmul_precision('high')
