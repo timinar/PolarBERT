@@ -13,6 +13,17 @@ class IceCubeDataset(IterableDataset):
         transform=lambda x: x.astype(np.float32), 
         target_transform=lambda x: x.astype(np.float32)
     )
+    
+    each batch contrains (x, l), (y, c)
+    x - features, l -  event length (len(selected_idx))
+    y - labels, c - charge
+
+    features x contrain (see prepare_memmaped_data.py):
+        0 - time ((time[selected_idx] - 1e4) / 3e4)
+        1 - charge (np.log10(charge[selected_idx]) / 3.0)
+        2 - auxiliary (auxiliary[selected_idx] - 0.5)
+        3 - dom_id (sensor_id[selected_idx] + 1)
+        all padding values are 0
     """
     def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None):
         self.batch_size = batch_size
