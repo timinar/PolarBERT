@@ -15,6 +15,8 @@ setup(
         "tqdm",
         "pyyaml",
         "wandb",
+        "seaborn",
+        "matplotlib",
     ],
     author="Inar Timiryasov",
     author_email="timinar@gmail.com",
