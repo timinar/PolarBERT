@@ -15,6 +15,8 @@ model:
   hidden_size: 1024
   num_layers: 8
   ffd_type: "SwiGLU" # | "MLP"
+  use_rope: False
+  use_positional_embedding: False  # assert use_rope is False
   lambda_charge: 1.0
   model_name: 'polarbert_time_embed'
 
@@ -26,6 +28,8 @@ model:
     time_vocab_size: 52000
     dom_vocab_size: 5162 # 5160 DOMS + PAD + MASK
     charge_vocab_size: 128
+    charge_bin_min: -0.6
+    charge_bin_max: 0.9
     masking_doms: true
     masking_times: false
     masking_charges: false

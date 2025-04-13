@@ -40,6 +40,8 @@ class EmbeddingConfig:
             self.time_vocab_size: int = int(data.get('time_vocab_size', 52000))
             self.dom_vocab_size: int = int(data.get('dom_vocab_size', 5162))
             self.charge_vocab_size: int = int(data.get('charge_vocab_size', 128))
+            self.charge_bin_min: float = float(data.get('charge_bin_min', -0.6))
+            self.charge_bin_max: float = float(data.get('charge_bin_max', 0.9))
             # self.aux_vocab_size: int = int(data.get('aux_vocab_size', 4)) # If needed
 
             self.masking_doms: bool = bool(data.get('masking_doms', True))
@@ -74,6 +76,8 @@ class ModelConfig:
             self.ffd_type: str = str(data.get('ffd_type', 'SwiGLU'))
             self.lambda_charge: float = float(data.get('lambda_charge', 1.0))
             self.model_name: str = str(data.get('model_name', 'polarbert_model'))
+            self.use_rope: bool = bool(data.get('use_rope', False))
+            self.use_positional_embedding: bool = bool(data.get('use_positional_embedding', False))
             embedding_data = data.get('embedding', {})
             self.embedding = EmbeddingConfig(embedding_data)
             # Ensure model's embedding_dim matches embedding config's target dim
@@ -296,6 +300,10 @@ class PolarBertConfig: # Renamed from ExperimentConfig
          if self.model.embedding_dim % self.model.num_heads != 0:
               raise ValueError(f"model.embedding_dim ({self.model.embedding_dim}) must be divisible "
                                f"by model.num_heads ({self.model.num_heads})")
+         
+         # Validate RoPE and positional embedding configuration
+         if self.model.use_rope and self.model.use_positional_embedding:
+              raise ValueError("model.use_positional_embedding must be False when model.use_rope is True")
 
          # --- Embedding Validation ---
          emb_cfg = self.model.embedding
