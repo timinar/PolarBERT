@@ -75,6 +75,8 @@ class ModelConfig:
             self.num_layers: int = int(data.get('num_layers', 8))
             self.ffd_type: str = str(data.get('ffd_type', 'SwiGLU'))
             self.lambda_charge: float = float(data.get('lambda_charge', 1.0))
+            self.dropout: float = float(data.get('attention_dropout', 0.0))
+            self.norm_eps: float = float(data.get('norm_eps', 1e-5))
             self.model_name: str = str(data.get('model_name', 'polarbert_model'))
             self.use_rope: bool = bool(data.get('use_rope', False))
             self.use_positional_embedding: bool = bool(data.get('use_positional_embedding', False))

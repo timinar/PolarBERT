@@ -128,9 +128,11 @@ class IceCubeTimeEmbedding(nn.Module):
 
         # --- 4. Process Charge Feature to Indices ---
         charge_normalized = x[:, :, 1]
+        #TODO Benchmark this! Before there was a warning about non-contiguous tensors
+        charge_normalized_contig = charge_normalized.contiguous()
         # Use the buffer for bin edges - it's already on the correct device
         # Note: self.charge_bin_edges is automatically moved by PyTorch's .to(device)
-        bucket_indices = torch.bucketize(charge_normalized, self.charge_bin_edges, right=True)
+        bucket_indices = torch.bucketize(charge_normalized_contig, self.charge_bin_edges, right=True)
         charge_indices_base = torch.clamp(bucket_indices, min=1, max=self.num_charge_bins)
         charge_indices = torch.where(padding_mask, PAD_IDX, charge_indices_base)
 

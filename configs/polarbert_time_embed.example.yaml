@@ -17,6 +17,8 @@ model:
   ffd_type: "SwiGLU" # | "MLP"
   use_rope: False
   use_positional_embedding: False  # assert use_rope is False
+  dropout: 0.0
+  norm_eps: 1e-5
   lambda_charge: 1.0
   model_name: 'polarbert_time_embed'
 
@@ -42,7 +44,7 @@ training:
   logical_batch_size: 4096 # Batch size used for training (will use gradient accumulation if necessary)
   val_check_interval: 0.5
   gpus: 1
-  precision: "16-mixed"
+  precision: "16-mixed" # If you encounter any instability (like loss becoming NaN) with "16-mixed", switching to "bf16-mixed"
   gradient_clip_val: 1.0
   max_lr: 3e-4
   optimizer_kwargs:
@@ -65,7 +67,7 @@ training:
   checkpoint:
     dirpath: 'checkpoints'
     save_top_k: 1
-    monitor: 'val/full_loss'
+    monitor: 'val/loss' # has changed from the older version!
     mode: 'min'
     save_last: true
     save_final: true
