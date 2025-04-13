@@ -1,0 +1,70 @@
+data:
+  max_per_device_batch_size: 4096 # Maximum batch size that fits on the GPU
+  train_dir: '/path/to/train/data'
+  val_dir: '/path/to/val/data'
+  train_events: 100000000
+  val_events: 200000
+  pin_memory: false
+  num_workers: 1 # Should remain 1 when using an IterableDataset
+  persistent_workers: true
+
+model:
+  embedding_dim: 256
+  dom_embed_dim: 128
+  num_heads: 8
+  hidden_size: 1024
+  num_layers: 8
+  ffd_type: "SwiGLU" # | "MLP"
+  lambda_charge: 1.0
+  model_name: 'polarbert_time_embed'
+
+  embedding:
+    time_embedding_dim: 128
+    dom_embedding_dim: 108
+    charge_embedding_dim: 16
+    aux_embedding_dim: 4
+    time_vocab_size: 52000
+    dom_vocab_size: 5162 # 5160 DOMS + PAD + MASK
+    charge_vocab_size: 128
+    masking_doms: true
+    masking_times: false
+    masking_charges: false
+    masking_prob: 0.25
+    embedding_projection: false
+
+
+training:
+  max_epochs: 20
+  logical_batch_size: 4096 # Batch size used for training (will use gradient accumulation if necessary)
+  val_check_interval: 0.5
+  gpus: 1
+  precision: "16-mixed"
+  gradient_clip_val: 1.0
+  max_lr: 3e-4
+  optimizer_kwargs:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1e-8
+    weight_decay: 0.1
+    amsgrad: false
+  lr_scheduler: 'onecycle'
+  
+  # Warm-up configuration
+  # If warm_up_steps is set, pct_start will be calculated as warm_up_steps / total_steps
+  # Otherwise, the fixed pct_start value below will be used
+  warm_up_steps: 1000  # Number of steps for learning rate warm-up
+  pct_start: 0.2       # Percentage of training for warm-up when warm_up_steps is not provided
+  div_factor: 25.0
+  final_div_factor: 1e4
+
+  
+  checkpoint:
+    dirpath: 'checkpoints'
+    save_top_k: 1
+    monitor: 'val/full_loss'
+    mode: 'min'
+    save_last: true
+    save_final: true
+
+  logging:
+    project: 'PolarBERT-time-embed'
