@@ -2,6 +2,7 @@ checkpoints/
 wandb/
 evaluation_results/
 logs/
+notebooks/dev/
 
 # Configs with real paths
 configs/*.yaml
