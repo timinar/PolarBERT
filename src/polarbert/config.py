@@ -213,100 +213,81 @@ class LoggingConfig:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
+
 class TrainingConfig:
     def __init__(self, data: Dict[str, Any]):
-        # Define expected keys for the 'training' section in YAML
-        expected_keys = {
-            # Fine-tuning specific
-            'task', 'pretrained_checkpoint_path', 'freeze_backbone',
-            # Original Training Params
-            'max_epochs', 'logical_batch_size', 'val_check_interval', 'gpus',
-            'precision', 'gradient_clip_val',
-            # Optimizer (Flat structure expected)
-            'optimizer', 'max_lr', 'adam_beta1', 'adam_beta2', 'adam_eps',
-            'weight_decay', 'amsgrad',
-            # Scheduler
-            'lr_scheduler', 'warm_up_steps', 'pct_start', 'div_factor', 'final_div_factor',
-            # Nested Config Section Keys
-            'checkpoint', 'logging'
-        }
-        # Validate keys provided in the YAML 'training' section against expected keys
-        self._validate_keys("TrainingConfig", data.keys(), expected_keys)
-
         try:
-            # --- Fine-tuning Specific Params ---
-            self.task: str = str(data.get('task', 'direction')) # Default to 'direction' if missing
-            self.pretrained_checkpoint_path: Optional[str] = data.get('pretrained_checkpoint_path', None) # Default None
-            self.freeze_backbone: bool = bool(data.get('freeze_backbone', False)) # Default False
-
-            # --- Original Training Params ---
-            # Defaults adjusted for fine-tuning where appropriate
-            self.max_epochs: int = int(data.get('max_epochs', 10))
-            self.logical_batch_size: int = int(data.get('logical_batch_size', 1024))
-            self.val_check_interval: float = float(data.get('val_check_interval', 1.0))
+            # --- Training loop ---
+            self.max_epochs: int = int(data.get('max_epochs', 20))
+            self.logical_batch_size: int = int(data.get('logical_batch_size', 4096))
+            self.val_check_interval: float = float(data.get('val_check_interval', 1.0)) # Default to 1 epoch
             self.gpus: int = int(data.get('gpus', 1))
             self.precision: str = str(data.get('precision', '16-mixed'))
             self.gradient_clip_val: float = float(data.get('gradient_clip_val', 1.0))
 
-            # Optimizer (Flat structure expected)
+            # --- Fine-tuning / Multi-Task Specific ---
+            self.task: str = str(data.get('task', 'direction')) # Primary task
+            # Default 'mean'. Options: 'mean', 'cls'
+            self.directional_pooling_mode: str = str(data.get('directional_pooling_mode', 'mean')).lower()
+             # Default 1.0. Weight for auxiliary DOM loss during multi-task finetuning
+            self.lambda_dom: float = float(data.get('lambda_dom', 1.0))
+            # Add freeze_backbone and pretrained_checkpoint_path if they should be part of the static config
+            # Or handle them purely via command-line args and pass to model init separately
+            self.freeze_backbone: bool = bool(data.get('freeze_backbone', False))
+            self.pretrained_checkpoint_path: Optional[str] = data.get('pretrained_checkpoint_path', None) # Record path from config if provided
+
+            # --- Optimizer ---
             self.optimizer: str = str(data.get('optimizer', 'AdamW'))
-            self.max_lr: float = float(data.get('max_lr', 5e-5)) # Fine-tuning default LR
+            self.max_lr: float = float(data.get('max_lr', 3e-4))
             self.adam_beta1: float = float(data.get('adam_beta1', 0.9))
             self.adam_beta2: float = float(data.get('adam_beta2', 0.95))
             self.adam_eps: float = float(data.get('adam_eps', 1e-8))
-            self.weight_decay: float = float(data.get('weight_decay', 0.05)) # Fine-tuning default WD
+            self.weight_decay: float = float(data.get('weight_decay', 0.1))
             self.amsgrad: bool = bool(data.get('amsgrad', False))
 
-            # Scheduler
+            # --- Scheduler ---
             self.lr_scheduler: str = str(data.get('lr_scheduler', 'onecycle'))
-            self.warm_up_steps: Optional[int] = data.get('warm_up_steps', 50) # Fine-tuning default warmup
-            # Handle case where warm_up_steps is explicitly None in YAML
-            if self.warm_up_steps is not None:
-                self.warm_up_steps = int(self.warm_up_steps)
+            self.warm_up_steps: Optional[int] = data.get('warm_up_steps', 1000) # Allow None explicitly
+            if self.warm_up_steps is not None: self.warm_up_steps = int(self.warm_up_steps)
+            self.pct_start: float = float(data.get('pct_start', 0.1)) # Adjusted default, may be overridden
+            self.div_factor: float = float(data.get('div_factor', 25.0))
+            self.final_div_factor: float = float(data.get('final_div_factor', 1e4))
 
-            self.pct_start: float = float(data.get('pct_start', 0.1)) # Fine-tuning default pct_start
-            self.div_factor: float = float(data.get('div_factor', 10.0)) # Fine-tuning default div
-            self.final_div_factor: float = float(data.get('final_div_factor', 100.0)) # Fine-tuning default final_div
-
-            # Nested configs
+            # --- Nested configs ---
             checkpoint_data = data.get('checkpoint', {})
             self.checkpoint = CheckpointConfig(checkpoint_data)
             logging_data = data.get('logging', {})
             self.logging = LoggingConfig(logging_data)
 
-            # Runtime calculated attributes
+            # --- Runtime calculated attributes ---
             self.steps_per_epoch: Optional[int] = None
             self.total_steps: Optional[int] = None
             self.per_device_batch_size: Optional[int] = None
             self.gradient_accumulation_steps: Optional[int] = None
             self.effective_batch_size: Optional[int] = None
 
+            # --- Validate pooling mode ---
+            if self.directional_pooling_mode not in ['mean', 'cls']:
+                 raise ValueError(f"Invalid directional_pooling_mode: '{self.directional_pooling_mode}'. Must be 'mean' or 'cls'.")
+
+
         except (ValueError, TypeError) as e:
             print(f"Error parsing TrainingConfig: {e}. Input data: {data}")
             raise
 
-    def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
-        """Warns about unexpected keys in the config dictionary."""
-        # Convert provided_keys to set if it's dict_keys
-        unexpected_keys = set(provided_keys) - expected_keys
-        if unexpected_keys:
-            warnings.warn(
-                f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
-                UserWarning
-            )
-
-    def calculate_runtime_params(self, train_loader_len: int, max_per_device_batch_size: int):
+    def calculate_runtime_params(self, num_batches_per_epoch: int, max_per_device_batch_size: int):
         """Calculates derived parameters based on dataloader length and batch sizes."""
-        if train_loader_len <= 0:
-            raise ValueError("train_loader_len must be positive (estimated batches per device per epoch).")
+        if num_batches_per_epoch <= 0:
+             # Allow calculation even if estimate is 0, but warn heavily if total_steps needed.
+             warnings.warn("num_batches_per_epoch is zero or negative. Step calculations might be incorrect.")
+             num_batches_per_epoch = 1 # Avoid division by zero later, but result is likely wrong
 
         print("Calculating runtime training parameters...")
         # --- Batch size calculation ---
         logical_batch = self.logical_batch_size
-        # Use max_per_device from DataConfig passed as argument
         self.per_device_batch_size = min(max_per_device_batch_size, logical_batch)
-        # Ensure gradient_accumulation_steps is at least 1
-        self.gradient_accumulation_steps = max(1, math.ceil(logical_batch / self.per_device_batch_size))
+        if self.per_device_batch_size == 0: raise ValueError("Calculated per_device_batch_size is zero.") # Prevent division by zero
+        self.gradient_accumulation_steps = math.ceil(logical_batch / self.per_device_batch_size)
         self.effective_batch_size = self.gradient_accumulation_steps * self.per_device_batch_size
         print(f"  Logical Batch Size: {self.logical_batch_size}")
         print(f"  Max Per Device Batch Size: {max_per_device_batch_size}")
@@ -314,61 +295,62 @@ class TrainingConfig:
         print(f"  Gradient Accumulation Steps: {self.gradient_accumulation_steps}")
         print(f"  Effective Batch Size: {self.effective_batch_size}")
 
-
         # --- Step calculation ---
-        # train_loader_len is the estimated number of batches the dataloader yields
-        # per device per epoch. Total optimizer steps per epoch includes accumulation.
-        self.steps_per_epoch = train_loader_len * self.gradient_accumulation_steps # CORRECTED
-        self.total_steps = self.steps_per_epoch * self.max_epochs
-        print(f"  Steps per Epoch (optimizer steps): {self.steps_per_epoch}") # CORRECTED PRINT STATEMENT
-        print(f"  Total Steps: {self.total_steps}")
+        # num_batches_per_epoch is batches using per_device_batch_size
+        optimizer_steps_per_epoch = math.ceil(num_batches_per_epoch / self.gradient_accumulation_steps)
+        # Total steps usually refers to optimizer steps for schedulers like OneCycleLR
+        self.total_steps = optimizer_steps_per_epoch * self.max_epochs
+        self.steps_per_epoch = optimizer_steps_per_epoch # Store optimizer steps per epoch
+        print(f"  Optimizer Steps per Epoch: {self.steps_per_epoch}")
+        print(f"  Total Optimizer Steps: {self.total_steps}")
 
         # --- Adjust pct_start based on warm_up_steps ---
+        # Use total OPTIMIZER steps for scheduler calculations
         if self.warm_up_steps is not None and self.warm_up_steps > 0:
-            if self.total_steps and self.total_steps > 0: # Check if total_steps is calculated and positive
-                calculated_pct_start = min(1.0, self.warm_up_steps / self.total_steps)
-                if abs(calculated_pct_start - self.pct_start) > 1e-5: # Check if different from config value
-                    print(f"  Overriding pct_start based on warm_up_steps: "
-                          f"{self.pct_start:.4f} -> {calculated_pct_start:.4f}")
-                    self.pct_start = calculated_pct_start
+            if self.total_steps > 0:
+                 # pct_start should be fraction of total optimizer steps
+                 calculated_pct_start = min(1.0, self.warm_up_steps / self.total_steps)
+                 # Only override if warm_up_steps was explicitly provided
+                 # Check if the calculated value differs significantly from config default/value
+                 # if abs(calculated_pct_start - self.pct_start) > 1e-5:
+                 print(f"  Overriding pct_start based on warm_up_steps: "
+                       f"{self.pct_start:.4f} -> {calculated_pct_start:.4f} "
+                       f"(Warmup: {self.warm_up_steps}, Total Steps: {self.total_steps})")
+                 self.pct_start = calculated_pct_start
             else:
-                # Don't override pct_start if total_steps is unknown, just use the YAML value
-                print(f"  Warning: Cannot calculate pct_start from warm_up_steps as total_steps is {self.total_steps}. "
-                      f"Using configured pct_start: {self.pct_start:.4f}")
+                 print("  Warning: Cannot calculate pct_start from warm_up_steps as total_steps is zero.")
 
 
     def to_dict(self) -> Dict[str, Any]:
         d = self.__dict__.copy()
-        # Handle nested configs serialization
-        if hasattr(self, 'checkpoint') and isinstance(self.checkpoint, CheckpointConfig):
-             d['checkpoint'] = self.checkpoint.to_dict()
-        if hasattr(self, 'logging') and isinstance(self.logging, LoggingConfig):
-             d['logging'] = self.logging.to_dict()
-
-        # Exclude runtime calculated fields
-        runtime_keys = ['steps_per_epoch', 'total_steps', 'per_device_batch_size',
-                        'gradient_accumulation_steps', 'effective_batch_size']
-        for key in runtime_keys:
-            d.pop(key, None)
-        # Optionally exclude redundant path if loading from checkpoint dir method used elsewhere
-        # d.pop('pretrained_checkpoint_path', None)
+        d['checkpoint'] = self.checkpoint.to_dict()
+        d['logging'] = self.logging.to_dict()
+        # Exclude runtime calculated fields if they shouldn't be saved in YAML
+        # Or keep them if they are useful for reproducibility
+        # runtime_keys = ['steps_per_epoch', 'total_steps', 'per_device_batch_size',
+        #                 'gradient_accumulation_steps', 'effective_batch_size']
+        # for key in runtime_keys:
+        #     d.pop(key, None)
         return d
 
+# --- Main Config Class ---
 class PolarBertConfig: # Renamed from ExperimentConfig
     """Main configuration class orchestrating all sub-configurations."""
     def __init__(self, data_cfg: Dict, model_cfg: Dict, training_cfg: Dict):
         self.data = DataConfig(data_cfg)
         self.model = ModelConfig(model_cfg)
+        # Pass the model config embedding dim check to TrainingConfig if needed later
         self.training = TrainingConfig(training_cfg)
         self._validate() # Call validation method on initialization
 
     @classmethod
     def from_yaml(cls, path: str) -> 'PolarBertConfig':
         """Loads configuration from a YAML file."""
+        # ... (previous code for loading YAML) ...
         print(f"Loading configuration from: {path}")
         try:
             with open(path, 'r') as f:
-                cfg_dict = yaml.safe_load(f)
+                 cfg_dict = yaml.safe_load(f)
         except FileNotFoundError:
             print(f"Error: Configuration file not found at {path}")
             raise
@@ -378,139 +360,119 @@ class PolarBertConfig: # Renamed from ExperimentConfig
 
         required_keys = ['data', 'model', 'training']
         if not all(key in cfg_dict for key in required_keys):
-            raise ValueError(f"YAML file must contain top-level keys: {required_keys}")
-
-        # Pass the relevant subsections to the constructors
-        # The constructors themselves will handle defaults and validate keys
-        data_section = cfg_dict.get('data', {})
-        model_section = cfg_dict.get('model', {})
-        training_section = cfg_dict.get('training', {})
-
-        # Warnings for missing nested sections (optional, as constructors handle defaults)
-        if 'embedding' not in model_section:
-             warnings.warn("YAML model section does not contain 'embedding' subsection. Defaults will be used.", UserWarning)
-        if 'checkpoint' not in training_section:
-             warnings.warn("YAML training section does not contain 'checkpoint' subsection. Defaults will be used.", UserWarning)
-        if 'logging' not in training_section:
-             warnings.warn("YAML training section does not contain 'logging' subsection. Defaults will be used.", UserWarning)
+             raise ValueError(f"YAML file must contain top-level keys: {required_keys}")
+        if 'logging' not in cfg_dict.get('training', {}):
+             warnings.warn("YAML training section does not contain 'logging' subsection.")
+        if 'checkpoint' not in cfg_dict.get('training', {}):
+             warnings.warn("YAML training section does not contain 'checkpoint' subsection.")
 
         return cls(
-            data_cfg=data_section,
-            model_cfg=model_section,
-            training_cfg=training_section
+            data_cfg=cfg_dict.get('data', {}),
+            model_cfg=cfg_dict.get('model', {}),
+            training_cfg=cfg_dict.get('training', {})
         )
 
-    def calculate_runtime_params(self, train_loader_len: int):
-        """Calculates runtime parameters (steps, batches) after dataloader is known."""
-        # Pass the necessary value from DataConfig to TrainingConfig calculation method
-        self.training.calculate_runtime_params(train_loader_len, self.data.max_per_device_batch_size)
+
+    def calculate_runtime_params(self, num_batches_per_epoch: int):
+         """Calculates runtime parameters (steps, batches) after dataloader is known."""
+         # Pass the necessary value from DataConfig to TrainingConfig calculation method
+         self.training.calculate_runtime_params(num_batches_per_epoch, self.data.max_per_device_batch_size)
 
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            'data': self.data.to_dict(),
-            'model': self.model.to_dict(),
-            'training': self.training.to_dict()
-        }
+         # This will now include lambda_dom and directional_pooling_mode from TrainingConfig
+         return {
+             'data': self.data.to_dict(),
+             'model': self.model.to_dict(),
+             'training': self.training.to_dict()
+         }
 
     def save_yaml(self, path: str):
         """Saves the current configuration to a YAML file."""
+        # ... (previous code for saving YAML) ...
         print(f"Saving configuration to: {path}")
         target_dir = os.path.dirname(path)
         if target_dir: # Only create if path includes a directory
-            os.makedirs(target_dir, exist_ok=True)
-        # Use the to_dict method to get the serializable representation
+             os.makedirs(target_dir, exist_ok=True)
+        # Get dict WITH calculated runtime params included
         cfg_dict = self.to_dict()
         try:
             with open(path, 'w') as f:
-                yaml.dump(cfg_dict, f, default_flow_style=False, sort_keys=False)
+                 yaml.dump(cfg_dict, f, default_flow_style=False, sort_keys=False)
         except IOError as e:
             print(f"Error: Could not write config file to {path}: {e}")
             raise
 
+
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str, config_filename="config.yaml") -> 'PolarBertConfig':
         """Loads configuration from a YAML file in the same directory as a checkpoint."""
+        # ... (previous code) ...
         if not os.path.isfile(checkpoint_path):
-             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
         config_path = os.path.join(os.path.dirname(checkpoint_path), config_filename)
         if not os.path.isfile(config_path):
             raise FileNotFoundError(
-                f"Config file '{config_filename}' not found in checkpoint directory: "
-                f"{os.path.dirname(checkpoint_path)}"
+                 f"Config file '{config_filename}' not found in checkpoint directory: "
+                 f"{os.path.dirname(checkpoint_path)}"
             )
         print(f"Loading config associated with checkpoint {os.path.basename(checkpoint_path)}")
         return cls.from_yaml(config_path)
 
+
     def _validate(self):
-        """Performs configuration validation checks."""
-        print("Validating configuration...")
-        # --- Model Validation ---
-        if self.model.embedding_dim % self.model.num_heads != 0:
-            raise ValueError(f"model.embedding_dim ({self.model.embedding_dim}) must be divisible "
-                             f"by model.num_heads ({self.model.num_heads})")
+         """Performs configuration validation checks."""
+         print("Validating configuration...")
+         # --- Model Validation ---
+         if self.model.embedding_dim % self.model.num_heads != 0:
+             raise ValueError(f"model.embedding_dim ({self.model.embedding_dim}) must be divisible "
+                              f"by model.num_heads ({self.model.num_heads})")
 
-        # Validate RoPE and positional embedding configuration
-        if self.model.use_rope and self.model.use_positional_embedding:
-            raise ValueError("model.use_positional_embedding must be False when model.use_rope is True")
+         # Validate RoPE and positional embedding configuration
+         if self.model.use_rope and self.model.use_positional_embedding:
+             raise ValueError("model.use_positional_embedding must be False when model.use_rope is True")
 
-        # --- Embedding Validation ---
-        emb_cfg = self.model.embedding
-        if emb_cfg.embedding_projection:
-            # If projection is True, the sum doesn't strictly have to match, but we might want to check
-            # if the target self.model.embedding_dim is consistent.
-            # This check is already implicitly handled by self.model.embedding_dim = self.embedding.embedding_dim
-            pass
-        elif emb_cfg._sum_sub_dims != self.model.embedding_dim:
-             raise ValueError(
-                 f"embedding.embedding_projection is False, but sum of sub-embedding dims "
-                 f"({emb_cfg._sum_sub_dims}) does not match model.embedding_dim "
-                 f"({self.model.embedding_dim}). Adjust dimensions or set projection to True."
-             )
+         # --- Embedding Validation ---
+         emb_cfg = self.model.embedding
+         if not emb_cfg.embedding_projection:
+             if emb_cfg._sum_sub_dims != self.model.embedding_dim:
+                 raise ValueError(
+                     f"embedding.embedding_projection is False, but sum of sub-embedding dims "
+                     f"({emb_cfg._sum_sub_dims}) does not match model.embedding_dim "
+                     f"({self.model.embedding_dim}). Adjust dimensions or set projection to True."
+                 )
 
-        # --- Training Validation ---
-        train_cfg = self.training
-        # Check final_div_factor only if scheduler is onecycle
-        if isinstance(train_cfg.lr_scheduler, str) and train_cfg.lr_scheduler.lower() == 'onecycle':
+         # --- Training Validation ---
+         train_cfg = self.training
+         # Check pooling mode validity (already done in TrainingConfig.__init__)
+         # if train_cfg.directional_pooling_mode not in ['mean', 'cls']:
+         #     raise ValueError(...)
+
+         # Check final_div_factor only if scheduler is onecycle
+         if isinstance(train_cfg.lr_scheduler, str) and train_cfg.lr_scheduler.lower() == 'onecycle':
              if not isinstance(train_cfg.final_div_factor, (int, float)):
-                 raise TypeError(f"training.final_div_factor must be a number, but got type {type(train_cfg.final_div_factor)}")
+                 raise TypeError(f"training.final_div_factor must be a number, got {type(train_cfg.final_div_factor)}")
              if train_cfg.final_div_factor < 1.0:
-                 warnings.warn(f"training.final_div_factor ({train_cfg.final_div_factor}) is less than 1.0. "
-                               f"For OneCycleLR, this usually leads to a high final LR. Expected >= 1.0 (e.g., 1e4).",
-                               UserWarning)
+                 warnings.warn(f"training.final_div_factor ({train_cfg.final_div_factor}) < 1.0. "
+                               f"Usually >= 1.0 (e.g., 1e4) for OneCycleLR.", UserWarning)
 
-        # Note: pct_start validation logic removed here as it's handled during runtime calculation now.
+         # Warn if warm_up_steps and pct_start might conflict (handled by recalculation logic now)
+         # if train_cfg.warm_up_steps is not None and train_cfg.warm_up_steps > 0:
+         #     # Check if pct_start differs significantly from default only if warm_up_steps is used
+         #     if not math.isclose(train_cfg.pct_start, 0.1): # Default check
+         #          warnings.warn(f"training.warm_up_steps ({train_cfg.warm_up_steps}) is set. "
+         #                      f"Explicit training.pct_start ({train_cfg.pct_start}) might be ignored.", UserWarning)
 
-        print("Configuration validation passed (with potential warnings).")
-
+         print("Configuration validation passed (with potential warnings).")
 
 # --- Example Usage (Illustrative) ---
-# config_file_pretrain = "path/to/your/pretrain_config.yaml"
-# config_file_finetune = "path/to/your/finetune_config.yaml"
-#
+# config_file = "/path/to/your/finetuning_config.yaml"
 # try:
-#     # Load a pre-training config
-#     print("\n--- Loading Pre-train Config ---")
-#     config_pre = PolarBertConfig.from_yaml(config_file_pretrain)
-#     print(f"Pre-train Max LR: {config_pre.training.max_lr}")
-#     print(f"Pre-train Task (default): {config_pre.training.task}") # Will show 'direction'
-#
-#     # Load a fine-tuning config
-#     print("\n--- Loading Fine-tune Config ---")
-#     config_ft = PolarBertConfig.from_yaml(config_file_finetune)
-#     print(f"Fine-tune Max LR: {config_ft.training.max_lr}")
-#     print(f"Fine-tune Task: {config_ft.training.task}")
-#     print(f"Fine-tune Checkpoint: {config_ft.training.pretrained_checkpoint_path}")
-#     print(f"Fine-tune Freeze Backbone: {config_ft.training.freeze_backbone}")
-#
-#     # --- Calculate Runtime Params (example, needs actual train_loader length) ---
-#     # Needs to be done after dataloader is created in your script
-#     # num_batches_per_epoch = 10000 # Placeholder! Calculate this properly.
-#     # config_ft.calculate_runtime_params(num_batches_per_epoch)
-#     # print("\n--- Calculated Runtime Params (Fine-tune) ---")
-#     # print(f"Total Steps: {config_ft.training.total_steps}")
-#     # print(f"Grad Accum Steps: {config_ft.training.gradient_accumulation_steps}")
-#     # print(f"Final pct_start for Scheduler: {config_ft.training.pct_start:.4f}")
-#
-# except (FileNotFoundError, ValueError, yaml.YAMLError, TypeError) as e:
-#     print(f"\nError loading/validating/calculating config: {e}")
+#     config = PolarBertConfig.from_yaml(config_file)
+#     # Mock calculation needs estimate of batches per epoch
+#     num_batches_per_epoch = 10000 # Placeholder! Calculate properly in main script.
+#     config.calculate_runtime_params(num_batches_per_epoch)
+#     print(config.training.directional_pooling_mode)
+#     print(config.training.lambda_dom)
+# except Exception as e:
+#      print(f"Error: {e}")
