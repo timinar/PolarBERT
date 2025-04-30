@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 import yaml
 import argparse
 from datetime import datetime
@@ -83,7 +83,18 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
                 torch.save(pl_module.state_dict(), save_path)
                 print(f"Final model saved to {save_path}")
         callbacks.append(FinalModelCallback())
-    
+
+    early_stopping_config = config['training'].get('early_stopping')
+    if early_stopping_config and early_stopping_config.get('enabled', False):
+        early_stopping_callback = EarlyStopping(
+            monitor=checkpoint_config['monitor'],
+            mode='min',
+            divergence_threshold=early_stopping_config.get('divergence_threshold', 10.),
+            patience=early_stopping_config.get('patience', 3),
+            check_finite=True,
+        )
+        callbacks.append(early_stopping_callback)
+
     return callbacks
 
 def default_transform(x, l):
