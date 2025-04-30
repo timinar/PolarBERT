@@ -1,12 +1,15 @@
 import torch
 import torch.nn as nn
-
+import logging
 class IceCubeEmbedding(nn.Module):
     def __init__(self, config, masking=False):
         super().__init__()
         embedding_dim = config['model']['embedding_dim']
         dom_embed_dim = config['model']['dom_embed_dim']
         self.mask_prob = config['training']['mask_prob']
+        self.val_mask_prob = config['training'].get('val_mask_prob', self.mask_prob)
+        if self.val_mask_prob != self.mask_prob:
+            logging.info(f"Using different mask probabilities for training and validation: {self.mask_prob} and {self.val_mask_prob}")
         num_doms = 5160
         self.dom_embedding = nn.Embedding(num_doms + 2, dom_embed_dim)
         self.features_embedding = nn.Linear(3, embedding_dim - dom_embed_dim)
@@ -28,7 +31,8 @@ class IceCubeEmbedding(nn.Module):
         # Masking
         if self.masking:
             auxiliary_mask = x[:, :, 2] == -0.5
-            random_mask = torch.rand(auxiliary_mask.shape, device=x.device) < self.mask_prob
+            mask_prob = self.mask_prob if self.training else self.val_mask_prob
+            random_mask = torch.rand(auxiliary_mask.shape, device=x.device) < mask_prob
             mask = auxiliary_mask & random_mask & ~padding_mask
             dom_embeds[mask] = self.dom_embedding(torch.tensor(self.mask_idx, device=x.device))
         
