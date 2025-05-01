@@ -21,6 +21,7 @@ class DataConfig:
             self.max_per_device_batch_size: int = int(data.get('max_per_device_batch_size', 4096))
             self.train_dir: str = str(data.get('train_dir', '/path/to/train/data'))
             self.val_dir: str = str(data.get('val_dir', '/path/to/val/data'))
+            self.prometheus_dir: Optional[str] = str(data.get('prometheus_dir', '/path/to/prometheus/data'))
             train_events_val = data.get('train_events', 100_000_000)
             self.train_events: Optional[int] = int(train_events_val) if train_events_val is not None else None
             val_events_val = data.get('val_events', 200_000)
