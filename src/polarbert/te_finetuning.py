@@ -20,9 +20,13 @@ try:
     from polarbert.config import PolarBertConfig
     from polarbert.time_embed_polarbert import PolarBertModel # Backbone
     from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
-    from polarbert.te_pretraining import get_dataloaders, setup_callbacks, default_transform
-    from polarbert.finetuning import DirectionalHead as OldDirectionalHead # Target transforms
-    from polarbert.finetuning import EnergyRegressionHead as OldEnergyRegressionHead # Target transforms
+    from polarbert.te_pretraining import setup_callbacks, default_transform # Keep setup_callbacks, default_transform
+    from polarbert.dataloader_utils import (
+        get_dataloaders,
+        target_transform_prometheus,
+        target_transform_kaggle,
+        default_transform # Already imported from te_pretraining, but explicit is fine
+    )
 except ImportError as e:
     print(f"Error importing project modules: {e}")
     raise e
@@ -314,9 +318,22 @@ def main():
 
     # 5. Get Dataloaders
     print("Creating dataloaders...")
-    try: target_transform = OldDirectionalHead.target_transform_kaggle if args.dataset_type == 'kaggle' else OldDirectionalHead.target_transform_prometheus
-    except AttributeError as e: raise ImportError(f"Error getting target transform: {e}") from e
-    train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=default_transform, target_transform=target_transform)
+    # Select target transform based on dataset type using imported functions
+    if args.dataset_type == 'kaggle':
+        target_transform_fn = target_transform_kaggle
+    elif args.dataset_type == 'prometheus':
+        target_transform_fn = target_transform_prometheus
+    else:
+        # Should not happen due to argparse choices
+        raise ValueError(f"Invalid dataset_type: {args.dataset_type}")
+
+    # Use the imported get_dataloaders and selected transform
+    train_loader, val_loader = get_dataloaders(
+        config,
+        dataset_type=args.dataset_type,
+        transform=default_transform, # Use the basic transform
+        target_transform=target_transform_fn # Pass the selected function
+    )
 
     # 6. Calculate Runtime Training Parameters
     print("Calculating runtime parameters...")
