@@ -116,6 +116,7 @@ class IceCubeTimeEmbedding(nn.Module):
         time_normalized = x[:, :, 0]
         time_float_approx = time_normalized * 3e4 + 1e4
         time_float_masked_for_min = torch.where(padding_mask, torch.full_like(time_float_approx, float('inf')), time_float_approx)
+        #TODO fix this logic! The first pulse has minimum time per event, so no need to make compicated stuff!
         t_min_per_event = torch.min(time_float_masked_for_min, dim=1, keepdim=True)[0]
         t_min_per_event = torch.where(torch.isinf(t_min_per_event), torch.zeros_like(t_min_per_event), t_min_per_event)
         time_relative_float = time_float_approx - t_min_per_event

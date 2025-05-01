@@ -1,9 +1,9 @@
-# config.py
+# src/polarbert/config.py
 import yaml
 import os
 import warnings
 import math # Needed for ceil
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Union # Added Union
 
 # --- Configuration Classes ---
 
@@ -11,31 +11,53 @@ class DataConfig:
     def __init__(self, data: Dict[str, Any]):
         # Define expected keys for this config section
         expected_keys = {
-            'max_per_device_batch_size', 'train_dir', 'val_dir',
-            'train_events', 'val_events', 'pin_memory',
-            'num_workers', 'persistent_workers'
+            # General paths and batching
+            'max_per_device_batch_size',
+            'pin_memory', 'num_workers', 'persistent_workers',
+            # Kaggle paths and event counts (using general names)
+            'train_dir', 'val_dir',
+            'train_events', 'val_events',
+            # Prometheus path and event counts (specific names)
+            'prometheus_dir',
+            'prometheus_train_events', 'prometheus_val_events',
         }
         self._validate_keys("DataConfig", data.keys(), expected_keys)
 
         try:
-            self.max_per_device_batch_size: int = int(data.get('max_per_device_batch_size', 4096))
-            self.train_dir: str = str(data.get('train_dir', '/path/to/train/data'))
-            self.val_dir: str = str(data.get('val_dir', '/path/to/val/data'))
-            self.prometheus_dir: Optional[str] = str(data.get('prometheus_dir', '/path/to/prometheus/data'))
-            train_events_val = data.get('train_events', 100_000_000)
+            # Batching
+            self.max_per_device_batch_size: int = int(data.get('max_per_device_batch_size', 1024))
+
+            # Paths
+            self.train_dir: str = str(data.get('train_dir', '/path/to/kaggle/train/data')) # Primary (Kaggle) Train
+            self.val_dir: str = str(data.get('val_dir', '/path/to/kaggle/val/data'))       # Primary (Kaggle) Validation
+            self.prometheus_dir: Optional[str] = data.get('prometheus_dir', None)         # Prometheus Base
+
+            # Event Counts
+            # Primary (Kaggle) counts - use None to signify using the full dataset in the directory
+            train_events_val = data.get('train_events', None)
             self.train_events: Optional[int] = int(train_events_val) if train_events_val is not None else None
-            val_events_val = data.get('val_events', 200_000)
+            val_events_val = data.get('val_events', None)
             self.val_events: Optional[int] = int(val_events_val) if val_events_val is not None else None
-            self.pin_memory: bool = bool(data.get('pin_memory', False))
+
+            # Prometheus counts (Required for manual splitting)
+            p_train_events_val = data.get('prometheus_train_events', None)
+            self.prometheus_train_events: Optional[int] = int(p_train_events_val) if p_train_events_val is not None else None
+            p_val_events_val = data.get('prometheus_val_events', None)
+            self.prometheus_val_events: Optional[int] = int(p_val_events_val) if p_val_events_val is not None else None
+
+            # DataLoader settings
+            self.pin_memory: bool = bool(data.get('pin_memory', True))
             self.num_workers: int = int(data.get('num_workers', 1))
-            self.persistent_workers: bool = bool(data.get('persistent_workers', True))
+            self.persistent_workers: bool = bool(data.get('persistent_workers', self.num_workers > 0))
+
         except (ValueError, TypeError) as e:
             print(f"Error parsing DataConfig: {e}. Input data: {data}")
             raise
 
     def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
         """Warns about unexpected keys in the config dictionary."""
-        unexpected_keys = set(provided_keys) - expected_keys
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
         if unexpected_keys:
             warnings.warn(
                 f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
@@ -45,7 +67,9 @@ class DataConfig:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
+# --- EmbeddingConfig, ModelConfig (No changes needed) ---
 class EmbeddingConfig:
+    # --- No changes needed here for mixed training ---
     def __init__(self, data: Dict[str, Any]):
         expected_keys = {
             'time_embedding_dim', 'dom_embedding_dim', 'charge_embedding_dim', 'aux_embedding_dim',
@@ -64,7 +88,7 @@ class EmbeddingConfig:
             self.embedding_dim: int = int(data.get('embedding_dim', 256)) # Overall target dim
 
             self.time_vocab_size: int = int(data.get('time_vocab_size', 52000))
-            self.dom_vocab_size: int = int(data.get('dom_vocab_size', 5162))
+            self.dom_vocab_size: int = int(data.get('dom_vocab_size', 5162)) # 5160 DOMS + PAD + MASK
             self.charge_vocab_size: int = int(data.get('charge_vocab_size', 128))
             self.charge_bin_min: float = float(data.get('charge_bin_min', -0.6))
             self.charge_bin_max: float = float(data.get('charge_bin_max', 0.9))
@@ -86,7 +110,8 @@ class EmbeddingConfig:
 
     def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
         """Warns about unexpected keys in the config dictionary."""
-        unexpected_keys = set(provided_keys) - expected_keys
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
         if unexpected_keys:
             warnings.warn(
                 f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
@@ -99,34 +124,30 @@ class EmbeddingConfig:
         return d
 
 class ModelConfig:
+    # --- No changes needed here for mixed training ---
     def __init__(self, data: Dict[str, Any]):
-        # Keys expected at the top level of the 'model' section in YAML
-        # Includes keys for nested configs ('embedding', 'directional_head', etc.)
         expected_keys = {
             'embedding_dim', 'num_heads', 'hidden_size', 'num_layers',
             'ffd_type', 'lambda_charge', 'dropout', 'norm_eps',
             'model_name', 'use_rope', 'use_positional_embedding',
             'embedding', # Key for nested EmbeddingConfig dict
-            'directional_head', # Example key for nested head config dict
-            'energy_head' # Example key for nested head config dict
+            'directional_head', # Key for nested head config dict
+            'energy_head' # Key for nested head config dict
         }
-        # Note: We validate top-level keys here. Nested dicts ('embedding', 'directional_head')
-        # will be validated by their respective constructors if they exist.
         self._validate_keys("ModelConfig", data.keys(), expected_keys)
 
         try:
             self.embedding_dim: int = int(data.get('embedding_dim', 256))
             self.num_heads: int = int(data.get('num_heads', 8))
-            self.hidden_size: int = int(data.get('hidden_size', 1024))
+            self.hidden_size: int = int(data.get('hidden_size', 1024)) # Used in FFN
             self.num_layers: int = int(data.get('num_layers', 8))
-            self.ffd_type: str = str(data.get('ffd_type', 'SwiGLU'))
-            # lambda_charge is for pre-training, might be removed or ignored in fine-tuning specific config
-            self.lambda_charge: float = float(data.get('lambda_charge', 1.0))
-            self.dropout: float = float(data.get('dropout', 0.1)) # Adjusted default
-            self.norm_eps: float = float(data.get('norm_eps', 1e-5))
-            self.model_name: str = str(data.get('model_name', 'polarbert_model'))
-            self.use_rope: bool = bool(data.get('use_rope', False))
-            self.use_positional_embedding: bool = bool(data.get('use_positional_embedding', False))
+            self.ffd_type: str = str(data.get('ffd_type', 'SwiGLU')) # 'SwiGLU' or 'MLP'
+            self.lambda_charge: float = float(data.get('lambda_charge', 1.0)) # Weight for charge loss (pre-training)
+            self.dropout: float = float(data.get('dropout', 0.0)) # Dropout rate (set to 0.0 usually)
+            self.norm_eps: float = float(data.get('norm_eps', 1e-5)) # Epsilon for RMSNorm/LayerNorm
+            self.model_name: str = str(data.get('model_name', 'polarbert_model')) # Base name for saving
+            self.use_rope: bool = bool(data.get('use_rope', False)) # Rotary Positional Embeddings
+            self.use_positional_embedding: bool = bool(data.get('use_positional_embedding', False)) # Standard learned pos embeds
 
             # Handle nested embedding config
             embedding_data = data.get('embedding', {})
@@ -135,12 +156,9 @@ class ModelConfig:
             # Or ensure it matches the sum if projection is False (validation happens later)
             self.embedding_dim = self.embedding.embedding_dim # Use the dim from embedding config
 
-            # Handle potential nested head configs (example for directional)
-            # The fine-tuning script might access these directly via config.model.<head_name>.parameter
-            # Store the raw dictionary; parsing can happen in the model using it
-            self.directional_head: Optional[Dict[str, Any]] = data.get('directional_head', None)
+            # Handle potential nested head configs (store raw dict, parse in module)
+            self.directional_head: Optional[Dict[str, Any]] = data.get('directional_head', {'hidden_size': 1024}) # Add default structure
             self.energy_head: Optional[Dict[str, Any]] = data.get('energy_head', None)
-
 
         except (ValueError, TypeError) as e:
             print(f"Error parsing ModelConfig: {e}. Input data: {data}")
@@ -148,8 +166,8 @@ class ModelConfig:
 
     def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
         """Warns about unexpected keys in the config dictionary."""
-        # Convert provided_keys to set if it's dict_keys
-        unexpected_keys = set(provided_keys) - expected_keys
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
         if unexpected_keys:
             warnings.warn(
                 f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
@@ -159,29 +177,30 @@ class ModelConfig:
     def to_dict(self) -> Dict[str, Any]:
         d = self.__dict__.copy()
         d['embedding'] = self.embedding.to_dict()
-        # Keep nested head dicts as they are, or implement to_dict for them if they become classes
-        # d['directional_head'] = self.directional_head.to_dict() # If it were a class
+        # Keep nested head dicts as they are
         return d
 
-
 class CheckpointConfig:
+    # --- No changes needed here for mixed training, but adjust 'monitor' default ---
     def __init__(self, data: Dict[str, Any]):
         expected_keys = {'dirpath', 'save_top_k', 'monitor', 'mode', 'save_last', 'save_final'}
         self._validate_keys("CheckpointConfig", data.keys(), expected_keys)
         try:
             self.dirpath: str = str(data.get('dirpath', 'checkpoints'))
-            self.save_top_k: int = int(data.get('save_top_k', -1))
-            self.monitor: str = str(data.get('monitor', 'val/loss')) # Default fine-tuning monitor
+            self.save_top_k: int = int(data.get('save_top_k', 1)) # Default to saving best
+            # Default monitor might change depending on the primary goal (e.g., combined loss or specific task loss)
+            self.monitor: str = str(data.get('monitor', 'val/loss_combined')) # Monitor combined loss by default
             self.mode: str = str(data.get('mode', 'min'))
             self.save_last: bool = bool(data.get('save_last', True))
-            self.save_final: bool = bool(data.get('save_final', False)) # Default false for fine-tuning
+            self.save_final: bool = bool(data.get('save_final', True)) # Save final model state dict separately
         except (ValueError, TypeError) as e:
             print(f"Error parsing CheckpointConfig: {e}. Input data: {data}")
             raise
 
     def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
         """Warns about unexpected keys in the config dictionary."""
-        unexpected_keys = set(provided_keys) - expected_keys
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
         if unexpected_keys:
             warnings.warn(
                 f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
@@ -192,19 +211,21 @@ class CheckpointConfig:
         return self.__dict__
 
 class LoggingConfig:
+    # --- No changes needed here for mixed training ---
     def __init__(self, data: Dict[str, Any]):
-        expected_keys = {'project'} # Add 'entity', 'log_every_n_steps' etc. if used
+        expected_keys = {'project', 'entity'} # Add 'entity' if commonly used
         self._validate_keys("LoggingConfig", data.keys(), expected_keys)
         try:
             self.project: str = str(data.get('project', 'PolarBERT-Default-Project'))
-            # Add other logging args here
+            self.entity: Optional[str] = data.get('entity', None) # WandB entity
         except (ValueError, TypeError) as e:
             print(f"Error parsing LoggingConfig: {e}. Input data: {data}")
             raise
 
     def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
         """Warns about unexpected keys in the config dictionary."""
-        unexpected_keys = set(provided_keys) - expected_keys
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
         if unexpected_keys:
             warnings.warn(
                 f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
@@ -214,28 +235,50 @@ class LoggingConfig:
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
-
 class TrainingConfig:
     def __init__(self, data: Dict[str, Any]):
+         # Define expected keys for this config section
+        expected_keys = {
+            # Training loop
+            'max_epochs', 'logical_batch_size', 'val_check_interval', 'gpus',
+            'precision', 'gradient_clip_val',
+            # Task & Model Specific
+            'task', 'directional_pooling_mode', 'freeze_backbone',
+            'pretrained_checkpoint_path', # Allow setting initial checkpoint here
+            # Loss Weights (NEW)
+            'lambda_dom', # Original aux dom loss weight (maybe keep for backward compat?)
+            'lambda_dom_kaggle', 'lambda_dom_prometheus', 'lambda_dir_prometheus',
+            # Optimizer
+            'optimizer', 'max_lr', 'adam_beta1', 'adam_beta2', 'adam_eps',
+            'weight_decay', 'amsgrad',
+             # Scheduler
+            'lr_scheduler', 'warm_up_steps', 'pct_start', 'div_factor', 'final_div_factor',
+            # Nested Configs
+            'checkpoint', 'logging'
+        }
+        self._validate_keys("TrainingConfig", data.keys(), expected_keys)
+
         try:
             # --- Training loop ---
-            self.max_epochs: int = int(data.get('max_epochs', 20))
-            self.logical_batch_size: int = int(data.get('logical_batch_size', 4096))
-            self.val_check_interval: float = float(data.get('val_check_interval', 1.0)) # Default to 1 epoch
-            self.gpus: int = int(data.get('gpus', 1))
+            self.max_epochs: int = int(data.get('max_epochs', 10))
+            self.logical_batch_size: int = int(data.get('logical_batch_size', 2048))
+            self.val_check_interval: Any = data.get('val_check_interval', 1.0) # Float (fraction) or Int (batches)
+            self.gpus: Union[int, List[int], str] = data.get('gpus', 1)
             self.precision: str = str(data.get('precision', '16-mixed'))
-            self.gradient_clip_val: float = float(data.get('gradient_clip_val', 1.0))
+            self.gradient_clip_val: Optional[float] = data.get('gradient_clip_val', 1.0)
+            if self.gradient_clip_val is not None: self.gradient_clip_val = float(self.gradient_clip_val)
 
             # --- Fine-tuning / Multi-Task Specific ---
-            self.task: str = str(data.get('task', 'direction')) # Primary task
-            # Default 'mean'. Options: 'mean', 'cls'
+            self.task: str = str(data.get('task', 'direction'))
             self.directional_pooling_mode: str = str(data.get('directional_pooling_mode', 'mean')).lower()
-             # Default 1.0. Weight for auxiliary DOM loss during multi-task finetuning
-            self.lambda_dom: float = float(data.get('lambda_dom', 1.0))
-            # Add freeze_backbone and pretrained_checkpoint_path if they should be part of the static config
-            # Or handle them purely via command-line args and pass to model init separately
             self.freeze_backbone: bool = bool(data.get('freeze_backbone', False))
-            self.pretrained_checkpoint_path: Optional[str] = data.get('pretrained_checkpoint_path', None) # Record path from config if provided
+            self.pretrained_checkpoint_path: Optional[str] = data.get('pretrained_checkpoint_path', None)
+
+            # --- Loss Weights (NEW) ---
+            self.lambda_dom: float = float(data.get('lambda_dom', 1.0)) # Aux DOM loss weight (maybe deprecated)
+            self.lambda_dom_kaggle: float = float(data.get('lambda_dom_kaggle', 1.0))
+            self.lambda_dom_prometheus: float = float(data.get('lambda_dom_prometheus', 1.0))
+            self.lambda_dir_prometheus: float = float(data.get('lambda_dir_prometheus', 1.0))
 
             # --- Optimizer ---
             self.optimizer: str = str(data.get('optimizer', 'AdamW'))
@@ -248,9 +291,9 @@ class TrainingConfig:
 
             # --- Scheduler ---
             self.lr_scheduler: str = str(data.get('lr_scheduler', 'onecycle'))
-            self.warm_up_steps: Optional[int] = data.get('warm_up_steps', 1000) # Allow None explicitly
+            self.warm_up_steps: Optional[int] = data.get('warm_up_steps', None)
             if self.warm_up_steps is not None: self.warm_up_steps = int(self.warm_up_steps)
-            self.pct_start: float = float(data.get('pct_start', 0.1)) # Adjusted default, may be overridden
+            self.pct_start: float = float(data.get('pct_start', 0.01))
             self.div_factor: float = float(data.get('div_factor', 25.0))
             self.final_div_factor: float = float(data.get('final_div_factor', 1e4))
 
@@ -269,89 +312,79 @@ class TrainingConfig:
 
             # --- Validate pooling mode ---
             if self.directional_pooling_mode not in ['mean', 'cls']:
-                 raise ValueError(f"Invalid directional_pooling_mode: '{self.directional_pooling_mode}'. Must be 'mean' or 'cls'.")
-
+                raise ValueError(f"Invalid directional_pooling_mode: '{self.directional_pooling_mode}'. Must be 'mean' or 'cls'.")
 
         except (ValueError, TypeError) as e:
             print(f"Error parsing TrainingConfig: {e}. Input data: {data}")
             raise
 
-    def calculate_runtime_params(self, num_batches_per_epoch: int, max_per_device_batch_size: int):
-        """Calculates derived parameters based on dataloader length and batch sizes."""
-        if num_batches_per_epoch <= 0:
-             # Allow calculation even if estimate is 0, but warn heavily if total_steps needed.
-             warnings.warn("num_batches_per_epoch is zero or negative. Step calculations might be incorrect.")
-             num_batches_per_epoch = 1 # Avoid division by zero later, but result is likely wrong
+    def _validate_keys(self, class_name: str, provided_keys: set, expected_keys: set):
+        """Warns about unexpected keys in the config dictionary."""
+        provided_keys_set = set(provided_keys)
+        unexpected_keys = provided_keys_set - expected_keys
+        if unexpected_keys:
+            warnings.warn(
+                f"In {class_name}: Unexpected keys found in config dictionary and will be ignored: {unexpected_keys}",
+                UserWarning
+            )
+
+    def calculate_runtime_params(self, total_device_steps: int):
+        """Calculates derived parameters based on device steps and batch sizes."""
+        if total_device_steps <= 0:
+            warnings.warn("total_device_steps is zero or negative. Step calculations might be incorrect.")
+            total_device_steps = 1
 
         print("Calculating runtime training parameters...")
-        # --- Batch size calculation ---
-        logical_batch = self.logical_batch_size
-        self.per_device_batch_size = min(max_per_device_batch_size, logical_batch)
-        if self.per_device_batch_size == 0: raise ValueError("Calculated per_device_batch_size is zero.") # Prevent division by zero
-        self.gradient_accumulation_steps = math.ceil(logical_batch / self.per_device_batch_size)
-        self.effective_batch_size = self.gradient_accumulation_steps * self.per_device_batch_size
-        print(f"  Logical Batch Size: {self.logical_batch_size}")
-        print(f"  Max Per Device Batch Size: {max_per_device_batch_size}")
-        print(f"  Calculated Per Device Batch Size: {self.per_device_batch_size}")
-        print(f"  Gradient Accumulation Steps: {self.gradient_accumulation_steps}")
-        print(f"  Effective Batch Size: {self.effective_batch_size}")
+        if self.per_device_batch_size is None or self.gradient_accumulation_steps is None:
+             raise RuntimeError("per_device_batch_size and gradient_accumulation_steps must be set before calling calculate_runtime_params.")
 
-        # --- Step calculation ---
-        # num_batches_per_epoch is batches using per_device_batch_size
-        optimizer_steps_per_epoch = math.ceil(num_batches_per_epoch / self.gradient_accumulation_steps)
-        # Total steps usually refers to optimizer steps for schedulers like OneCycleLR
-        self.total_steps = optimizer_steps_per_epoch * self.max_epochs
-        self.steps_per_epoch = optimizer_steps_per_epoch # Store optimizer steps per epoch
-        print(f"  Optimizer Steps per Epoch: {self.steps_per_epoch}")
+        self.effective_batch_size = self.gradient_accumulation_steps * self.per_device_batch_size * (self.gpus if isinstance(self.gpus, int) else 1)
+        print(f"  Logical Batch Size: {self.logical_batch_size}")
+        print(f"  Per Device Batch Size: {self.per_device_batch_size}")
+        print(f"  Gradient Accumulation Steps: {self.gradient_accumulation_steps}")
+        print(f"  Approx Effective Batch Size (GPUs={self.gpus}): {self.effective_batch_size}")
+
+        self.total_steps = math.ceil(total_device_steps / self.gradient_accumulation_steps)
+        print(f"  Total Device Steps (Batches * Epochs): {total_device_steps}")
         print(f"  Total Optimizer Steps: {self.total_steps}")
 
-        # --- Adjust pct_start based on warm_up_steps ---
-        # Use total OPTIMIZER steps for scheduler calculations
         if self.warm_up_steps is not None and self.warm_up_steps > 0:
             if self.total_steps > 0:
-                 # pct_start should be fraction of total optimizer steps
-                 calculated_pct_start = min(1.0, self.warm_up_steps / self.total_steps)
-                 # Only override if warm_up_steps was explicitly provided
-                 # Check if the calculated value differs significantly from config default/value
-                 # if abs(calculated_pct_start - self.pct_start) > 1e-5:
-                 print(f"  Overriding pct_start based on warm_up_steps: "
-                       f"{self.pct_start:.4f} -> {calculated_pct_start:.4f} "
-                       f"(Warmup: {self.warm_up_steps}, Total Steps: {self.total_steps})")
-                 self.pct_start = calculated_pct_start
+                calculated_pct_start = min(1.0, self.warm_up_steps / self.total_steps)
+                if abs(calculated_pct_start - self.pct_start) > 1e-5:
+                     print(f"  Overriding pct_start based on warm_up_steps: "
+                           f"{self.pct_start:.4f} -> {calculated_pct_start:.4f} "
+                           f"(Warmup: {self.warm_up_steps}, Total Optimizer Steps: {self.total_steps})")
+                self.pct_start = calculated_pct_start
             else:
                  print("  Warning: Cannot calculate pct_start from warm_up_steps as total_steps is zero.")
-
+        else:
+            print(f"  Using configured pct_start: {self.pct_start:.4f}")
 
     def to_dict(self) -> Dict[str, Any]:
         d = self.__dict__.copy()
         d['checkpoint'] = self.checkpoint.to_dict()
         d['logging'] = self.logging.to_dict()
-        # Exclude runtime calculated fields if they shouldn't be saved in YAML
-        # Or keep them if they are useful for reproducibility
-        # runtime_keys = ['steps_per_epoch', 'total_steps', 'per_device_batch_size',
-        #                 'gradient_accumulation_steps', 'effective_batch_size']
-        # for key in runtime_keys:
-        #     d.pop(key, None)
         return d
 
 # --- Main Config Class ---
-class PolarBertConfig: # Renamed from ExperimentConfig
+class PolarBertConfig:
     """Main configuration class orchestrating all sub-configurations."""
     def __init__(self, data_cfg: Dict, model_cfg: Dict, training_cfg: Dict):
         self.data = DataConfig(data_cfg)
         self.model = ModelConfig(model_cfg)
-        # Pass the model config embedding dim check to TrainingConfig if needed later
         self.training = TrainingConfig(training_cfg)
+        # Store max_per_device_batch_size in training config for easy access during runtime calc
+        # self.training.max_per_device_batch_size = self.data.max_per_device_batch_size # Added this line
         self._validate() # Call validation method on initialization
 
     @classmethod
     def from_yaml(cls, path: str) -> 'PolarBertConfig':
         """Loads configuration from a YAML file."""
-        # ... (previous code for loading YAML) ...
         print(f"Loading configuration from: {path}")
         try:
             with open(path, 'r') as f:
-                 cfg_dict = yaml.safe_load(f)
+                cfg_dict = yaml.safe_load(f)
         except FileNotFoundError:
             print(f"Error: Configuration file not found at {path}")
             raise
@@ -361,11 +394,11 @@ class PolarBertConfig: # Renamed from ExperimentConfig
 
         required_keys = ['data', 'model', 'training']
         if not all(key in cfg_dict for key in required_keys):
-             raise ValueError(f"YAML file must contain top-level keys: {required_keys}")
-        if 'logging' not in cfg_dict.get('training', {}):
-             warnings.warn("YAML training section does not contain 'logging' subsection.")
-        if 'checkpoint' not in cfg_dict.get('training', {}):
-             warnings.warn("YAML training section does not contain 'checkpoint' subsection.")
+            raise ValueError(f"YAML file must contain top-level keys: {required_keys}")
+
+        if 'embedding' not in cfg_dict.get('model', {}): warnings.warn("YAML model section missing 'embedding'.")
+        if 'logging' not in cfg_dict.get('training', {}): warnings.warn("YAML training section missing 'logging'.")
+        if 'checkpoint' not in cfg_dict.get('training', {}): warnings.warn("YAML training section missing 'checkpoint'.")
 
         return cls(
             data_cfg=cfg_dict.get('data', {}),
@@ -373,107 +406,74 @@ class PolarBertConfig: # Renamed from ExperimentConfig
             training_cfg=cfg_dict.get('training', {})
         )
 
-
-    def calculate_runtime_params(self, num_batches_per_epoch: int):
-         """Calculates runtime parameters (steps, batches) after dataloader is known."""
-         # Pass the necessary value from DataConfig to TrainingConfig calculation method
-         self.training.calculate_runtime_params(num_batches_per_epoch, self.data.max_per_device_batch_size)
-
+    def calculate_runtime_params(self, total_device_steps: int):
+        """Calculates runtime parameters (steps, batches) after dataloader info is available."""
+        self.training.calculate_runtime_params(total_device_steps)
 
     def to_dict(self) -> Dict[str, Any]:
-         # This will now include lambda_dom and directional_pooling_mode from TrainingConfig
-         return {
-             'data': self.data.to_dict(),
-             'model': self.model.to_dict(),
-             'training': self.training.to_dict()
-         }
+        """Converts the config object (including nested ones) to a dictionary."""
+        return {
+            'data': self.data.to_dict(),
+            'model': self.model.to_dict(),
+            'training': self.training.to_dict()
+        }
 
     def save_yaml(self, path: str):
-        """Saves the current configuration to a YAML file."""
-        # ... (previous code for saving YAML) ...
+        """Saves the current configuration state to a YAML file."""
         print(f"Saving configuration to: {path}")
         target_dir = os.path.dirname(path)
-        if target_dir: # Only create if path includes a directory
-             os.makedirs(target_dir, exist_ok=True)
-        # Get dict WITH calculated runtime params included
+        if target_dir: os.makedirs(target_dir, exist_ok=True)
         cfg_dict = self.to_dict()
         try:
             with open(path, 'w') as f:
-                 yaml.dump(cfg_dict, f, default_flow_style=False, sort_keys=False)
+                yaml.dump(cfg_dict, f, default_flow_style=False, sort_keys=False, indent=2)
         except IOError as e:
             print(f"Error: Could not write config file to {path}: {e}")
             raise
 
-
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str, config_filename="config.yaml") -> 'PolarBertConfig':
-        """Loads configuration from a YAML file in the same directory as a checkpoint."""
-        # ... (previous code) ...
+        """Loads configuration from a YAML file stored with a checkpoint."""
         if not os.path.isfile(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
         config_path = os.path.join(os.path.dirname(checkpoint_path), config_filename)
         if not os.path.isfile(config_path):
-            raise FileNotFoundError(
-                 f"Config file '{config_filename}' not found in checkpoint directory: "
-                 f"{os.path.dirname(checkpoint_path)}"
-            )
-        print(f"Loading config associated with checkpoint {os.path.basename(checkpoint_path)}")
+             config_path_final = os.path.join(os.path.dirname(checkpoint_path), "final_config.yaml")
+             if os.path.isfile(config_path_final): config_path = config_path_final
+             else:
+                raise FileNotFoundError(
+                    f"Config file ('{config_filename}' or 'final_config.yaml') not found in {os.path.dirname(checkpoint_path)}"
+                )
+        print(f"Loading config associated with {os.path.basename(checkpoint_path)} from {os.path.basename(config_path)}")
         return cls.from_yaml(config_path)
 
-
     def _validate(self):
-         """Performs configuration validation checks."""
-         print("Validating configuration...")
-         # --- Model Validation ---
-         if self.model.embedding_dim % self.model.num_heads != 0:
-             raise ValueError(f"model.embedding_dim ({self.model.embedding_dim}) must be divisible "
-                              f"by model.num_heads ({self.model.num_heads})")
+        """Performs configuration validation checks."""
+        print("Validating configuration...")
+        # --- Model Validation ---
+        if self.model.embedding_dim % self.model.num_heads != 0:
+            raise ValueError(f"model.embedding_dim ({self.model.embedding_dim}) must be divisible by model.num_heads ({self.model.num_heads})")
+        if self.model.use_rope and self.model.use_positional_embedding:
+            raise ValueError("Cannot use both RoPE and standard positional embeddings.")
 
-         # Validate RoPE and positional embedding configuration
-         if self.model.use_rope and self.model.use_positional_embedding:
-             raise ValueError("model.use_positional_embedding must be False when model.use_rope is True")
+        # --- Embedding Validation ---
+        emb_cfg = self.model.embedding
+        if not emb_cfg.embedding_projection and emb_cfg._sum_sub_dims != self.model.embedding_dim:
+            raise ValueError(f"embedding_projection is False, but sum of sub-dims ({emb_cfg._sum_sub_dims}) != model.embedding_dim ({self.model.embedding_dim}).")
 
-         # --- Embedding Validation ---
-         emb_cfg = self.model.embedding
-         if not emb_cfg.embedding_projection:
-             if emb_cfg._sum_sub_dims != self.model.embedding_dim:
-                 raise ValueError(
-                     f"embedding.embedding_projection is False, but sum of sub-embedding dims "
-                     f"({emb_cfg._sum_sub_dims}) does not match model.embedding_dim "
-                     f"({self.model.embedding_dim}). Adjust dimensions or set projection to True."
-                 )
+        # --- Training Validation ---
+        train_cfg = self.training
+        # Pooling mode validated in TrainingConfig init
+        if isinstance(train_cfg.lr_scheduler, str) and train_cfg.lr_scheduler.lower() == 'onecycle':
+            if not isinstance(train_cfg.final_div_factor, (int, float)) or train_cfg.final_div_factor <= 0:
+                raise ValueError(f"training.final_div_factor must be > 0 for OneCycleLR, got {train_cfg.final_div_factor}")
+            if train_cfg.pct_start < 0 or train_cfg.pct_start > 1:
+                raise ValueError(f"training.pct_start must be in [0, 1], got {train_cfg.pct_start}")
 
-         # --- Training Validation ---
-         train_cfg = self.training
-         # Check pooling mode validity (already done in TrainingConfig.__init__)
-         # if train_cfg.directional_pooling_mode not in ['mean', 'cls']:
-         #     raise ValueError(...)
+        # --- Data Validation ---
+        if not self.data.train_dir or not os.path.isdir(self.data.train_dir): warnings.warn(f"Kaggle train_dir '{self.data.train_dir}' not found.")
+        if not self.data.val_dir or not os.path.isdir(self.data.val_dir): warnings.warn(f"Kaggle val_dir '{self.data.val_dir}' not found.")
+        if not self.data.prometheus_dir or not os.path.isdir(self.data.prometheus_dir): warnings.warn(f"Prometheus dir '{self.data.prometheus_dir}' not found.")
+        if self.data.prometheus_train_events is None or self.data.prometheus_val_events is None: warnings.warn("Prometheus event counts not set; splitting might fail.")
 
-         # Check final_div_factor only if scheduler is onecycle
-         if isinstance(train_cfg.lr_scheduler, str) and train_cfg.lr_scheduler.lower() == 'onecycle':
-             if not isinstance(train_cfg.final_div_factor, (int, float)):
-                 raise TypeError(f"training.final_div_factor must be a number, got {type(train_cfg.final_div_factor)}")
-             if train_cfg.final_div_factor < 1.0:
-                 warnings.warn(f"training.final_div_factor ({train_cfg.final_div_factor}) < 1.0. "
-                               f"Usually >= 1.0 (e.g., 1e4) for OneCycleLR.", UserWarning)
-
-         # Warn if warm_up_steps and pct_start might conflict (handled by recalculation logic now)
-         # if train_cfg.warm_up_steps is not None and train_cfg.warm_up_steps > 0:
-         #     # Check if pct_start differs significantly from default only if warm_up_steps is used
-         #     if not math.isclose(train_cfg.pct_start, 0.1): # Default check
-         #          warnings.warn(f"training.warm_up_steps ({train_cfg.warm_up_steps}) is set. "
-         #                      f"Explicit training.pct_start ({train_cfg.pct_start}) might be ignored.", UserWarning)
-
-         print("Configuration validation passed (with potential warnings).")
-
-# --- Example Usage (Illustrative) ---
-# config_file = "/path/to/your/finetuning_config.yaml"
-# try:
-#     config = PolarBertConfig.from_yaml(config_file)
-#     # Mock calculation needs estimate of batches per epoch
-#     num_batches_per_epoch = 10000 # Placeholder! Calculate properly in main script.
-#     config.calculate_runtime_params(num_batches_per_epoch)
-#     print(config.training.directional_pooling_mode)
-#     print(config.training.lambda_dom)
-# except Exception as e:
-#      print(f"Error: {e}")
+        print("Configuration validation passed (with potential warnings).")
