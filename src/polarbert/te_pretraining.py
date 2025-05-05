@@ -21,14 +21,6 @@ torch.set_float32_matmul_precision('high')
 try:
     from polarbert.config import PolarBertConfig # Import the main config class
     from polarbert.time_embed_polarbert import PolarBertModel # Import the new model class
-    # Import dataloader utilities
-    from polarbert.dataloader_utils import (
-        get_dataloaders,
-        target_transform_prometheus,
-        target_transform_kaggle,
-        default_transform,
-        default_target_transform # Import default target transform as well
-    )
     # Dataloader depends on dataset type, handled in get_dataloaders
     # Embedding is part of PolarBertModel
 except ImportError as e:
@@ -36,7 +28,7 @@ except ImportError as e:
     print("Please ensure classes are defined and accessible.")
     raise e
 
-# --- Dataloader Function (Adapted) --- REMOVE THIS SECTION ---
+# --- Dataloader Function (Adapted) ---
 
 # Keep default transforms for now, could be moved to config later if needed
 # def default_transform(x, l):
@@ -45,27 +37,82 @@ except ImportError as e:
 
 #  to fix this warning:
 # UserWarning: The given NumPy array is not writable... writing to this tensor will result in undefined behavior.
-# def default_transform(x, l):
-#     # Ensure a writable copy is returned
-#     return x.astype(np.float32).copy(), l.astype(np.int32).copy()
+def default_transform(x, l):
+    # Ensure a writable copy is returned
+    return x.astype(np.float32).copy(), l.astype(np.int32).copy()
 
-# def default_target_transform(y, c):
-#     # Ensure charge is float, y might be complex (dict/structured array) or simple array
-#     # Return None for y if no specific target transform needed for pretraining labels
-#     return y, c.astype(np.float32)
+def default_target_transform(y, c):
+    # Ensure charge is float, y might be complex (dict/structured array) or simple array
+    # Return None for y if no specific target transform needed for pretraining labels
+    return y, c.astype(np.float32)
 
 
-# def get_dataloaders(
-#         config: PolarBertConfig, # Use PolarBertConfig object
-#         dataset_type: str,
-#         transform=default_transform,
-#         target_transform=default_target_transform,
-#     ) -> Tuple[DataLoader, DataLoader]:
-#     """Creates train and validation dataloaders."""
-#     # ... (rest of the local get_dataloaders function definition) ...
-#     # REMOVE ALL OF THIS FUNCTION DEFINITION
+def get_dataloaders(
+        config: PolarBertConfig, # Use PolarBertConfig object
+        dataset_type: str,
+        transform=default_transform,
+        target_transform=default_target_transform,
+    ) -> Tuple[DataLoader, DataLoader]:
+    """Creates train and validation dataloaders."""
 
-# --- END OF REMOVED SECTION ---
+    print(f"Using dataset type: {dataset_type}")
+    if dataset_type == 'prometheus':
+        # Ensure prometheus dataset class is importable
+        from polarbert.prometheus_dataset import IceCubeDataset
+        print("Imported Prometheus IceCubeDataset.")
+    elif dataset_type == 'kaggle':
+        # Ensure kaggle dataset class is importable
+        from polarbert.icecube_dataset import IceCubeDataset
+        print("Imported Kaggle IceCubeDataset.")
+    else:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+    if config.training.per_device_batch_size is None:
+        raise ValueError("per_device_batch_size must be calculated before calling get_dataloaders.")
+
+    print(f"Instantiating train dataset from: {config.data.train_dir}")
+    full_train_dataset = IceCubeDataset(
+        data_dir=config.data.train_dir,
+        # Use the per_device_batch_size calculated based on logical and max_per_device
+        batch_size=config.training.per_device_batch_size,
+        transform=transform,
+        target_transform=target_transform
+    )
+    print(f"Instantiating validation dataset from: {config.data.val_dir}")
+    full_val_dataset = IceCubeDataset(
+        data_dir=config.data.val_dir,
+        batch_size=config.training.per_device_batch_size, # Use same device batch size for validation
+        transform=transform,
+        target_transform=target_transform
+    )
+
+    # Slicing logic based on event counts
+    train_events = config.data.train_events
+    val_events = config.data.val_events
+
+    # Select appropriate slicing based on dataset type if needed
+    # (Using simple slicing for now, adjust if datasets have different structures)
+    print(f"Slicing train dataset to {train_events} events.")
+    train_dataset = full_train_dataset.slice(0, train_events)
+    print(f"Slicing validation dataset to {val_events} events.")
+    val_dataset = full_val_dataset.slice(0, val_events)
+
+    # Dataloader arguments
+    loader_kwargs = {
+        'batch_size': None, # Handled by IceCubeDataset internal batching
+        'num_workers': config.data.num_workers,
+        'pin_memory': config.data.pin_memory,
+        # Persistent workers require num_workers > 0
+        'persistent_workers': config.data.persistent_workers and config.data.num_workers > 0
+    }
+    print(f"Creating DataLoaders with num_workers={loader_kwargs['num_workers']}, "
+          f"pin_memory={loader_kwargs['pin_memory']}, "
+          f"persistent_workers={loader_kwargs['persistent_workers']}")
+
+    train_loader = DataLoader(train_dataset, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, **loader_kwargs)
+
+    return train_loader, val_loader
 
 
 # --- Callback Setup Function (Adapted) ---
@@ -149,14 +196,7 @@ def main():
     parser.add_argument('--name', type=str, default=None, help="Custom name for the training run.")
     parser.add_argument("--job_id", type=str, default=None, help="Job ID (e.g., SLURM ID) for naming.")
     # parser.add_argument("--model_type", type=str, ...) # No longer needed, model is PolarBertModel
-    # Add dataset_type argument if not already present
-    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], required=True, help='Type of dataset to load (kaggle or prometheus)')
-    # Add other arguments potentially needed by get_dataloaders if they are not in config
-    # parser.add_argument('--val_split', type=float, default=0.1, help='Fraction of data for validation split (if applicable)') # Example if needed
-    # parser.add_argument('--test_split', type=float, default=0.1, help='Fraction of data for test split (if applicable)') # Example if needed
-    # parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for dataloader (overrides config)') # Example if needed
-    # parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility (if applicable)') # Example if needed
-
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], required=True)
     # parser.add_argument("--random_time_offset", type=float, default=None) # Add back if needed
     args = parser.parse_args()
 
@@ -193,29 +233,15 @@ def main():
     print(f"Batch parameters: Per-Device Size={per_device_batch_size}, Grad Accum Steps={gradient_accumulation_steps}")
 
 
-    # 5. Get Dataloaders using the imported utility
+    # 5. Get Dataloaders
     print("Creating dataloaders...")
-    # Determine transforms based on dataset type
-    if args.dataset_type == 'prometheus':
-        target_transform_fn = target_transform_prometheus
-    elif args.dataset_type == 'kaggle':
-        target_transform_fn = target_transform_kaggle
-    else:
-        # Should not happen due to choices in argparse, but good practice
-        warnings.warn(f"Unexpected dataset_type '{args.dataset_type}', using default target transform.")
-        target_transform_fn = default_target_transform
-
     # Add transform logic back here if needed (e.g., random time offset)
     # transform_fn = add_random_time_offset(args.random_time_offset) if args.random_time_offset else default_transform
-    transform_fn = default_transform # Use basic transform for now
-
-    # Call the imported get_dataloaders
     train_loader, val_loader = get_dataloaders(
-        config=config,
+        config,
         dataset_type=args.dataset_type,
-        transform=transform_fn,
-        target_transform=target_transform_fn
-        # Pass override_batch_size if needed, or other args
+        transform=default_transform, # Use basic transform for now
+        target_transform=default_target_transform
     )
 
     # 6. Calculate Runtime Training Parameters (Total Steps, Final pct_start)

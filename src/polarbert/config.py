@@ -154,7 +154,6 @@ class ModelConfig:
             self.embedding = EmbeddingConfig(embedding_data)
             # Ensure model's embedding_dim matches embedding config's target dim if projection is used
             # Or ensure it matches the sum if projection is False (validation happens later)
-            self.embedding_dim = self.embedding.embedding_dim # Use the dim from embedding config
 
             # Handle potential nested head configs (store raw dict, parse in module)
             self.directional_head: Optional[Dict[str, Any]] = data.get('directional_head', {'hidden_size': 1024}) # Add default structure
@@ -270,7 +269,7 @@ class TrainingConfig:
 
             # --- Fine-tuning / Multi-Task Specific ---
             self.task: str = str(data.get('task', 'direction'))
-            self.directional_pooling_mode: str = str(data.get('directional_pooling_mode', 'mean')).lower()
+            self.directional_pooling_mode: str = str(data.get('directional_pooling_mode', 'cls')).lower()
             self.freeze_backbone: bool = bool(data.get('freeze_backbone', False))
             self.pretrained_checkpoint_path: Optional[str] = data.get('pretrained_checkpoint_path', None)
 
