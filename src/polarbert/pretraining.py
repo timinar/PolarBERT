@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional, Callable
 import math
+import logging
 
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
@@ -220,7 +221,6 @@ def main():
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'])
-    parser.add_argument("--random_time_offset", type=float, default=None)
     args = parser.parse_args()
 
     # Load and process config
@@ -255,8 +255,10 @@ def main():
     config['training'].update(batch_params)
 
     # Get data loaders
-    if args.random_time_offset is not None:
-        transform = add_random_time_offset(args.random_time_offset)
+    random_time_offset_std = config['training'].get('random_time_offset')
+    if random_time_offset_std is not None:
+        logging.info(f"Applying random time offset with std: {random_time_offset_std}")
+        transform = add_random_time_offset(random_time_offset_std)
     else:
         transform = default_transform
     train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform)

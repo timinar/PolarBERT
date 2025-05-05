@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from abc import abstractmethod
 from warnings import warn
+import logging
 
 from polarbert.pretraining import (
     load_and_process_config,
@@ -215,7 +216,6 @@ def main():
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
-    parser.add_argument("--random_time_offset", type=float, default=None)
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     args = parser.parse_args()
 
@@ -291,8 +291,10 @@ def main():
         assert False
     
     # Get data loaders
-    if args.random_time_offset is not None:
-        transform = add_random_time_offset(args.random_time_offset)
+    random_time_offset_std = config['training'].get('random_time_offset') # Read from config
+    if random_time_offset_std is not None:
+        logging.info(f"Applying random time offset with std: {random_time_offset_std}")
+        transform = add_random_time_offset(random_time_offset_std)
     else:
         transform = default_transform
     train_loader, val_loader = get_dataloaders(config, dataset_type=args.dataset_type, transform=transform, target_transform=target_transform)
