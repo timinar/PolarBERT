@@ -2,6 +2,13 @@ checkpoints/
 wandb/
 evaluation_results/
 logs/
+scripts/experiments/
+tables/
+notebooks/
+documents/*.pdf
+
+# Ignored files are manually backed up
+backup/
 
 # Configs with real paths
 configs/*.yaml
