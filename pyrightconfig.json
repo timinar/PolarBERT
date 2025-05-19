@@ -1,0 +1,13 @@
+{
+  "exclude": [
+    "**/__pycache__/",
+    "**/.*",
+    "backup/",
+    "configs/",
+    "documents/",
+    "logs/",
+    "src/polarbert/checkpoints/",
+    "src/polarbert/wandb/",
+    "tables/"
+  ]
+} 
