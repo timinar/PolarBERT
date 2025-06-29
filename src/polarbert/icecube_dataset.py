@@ -1,20 +1,24 @@
 import numpy as np
+from numpy.lib.recfunctions import structured_to_unstructured
 from torch.utils.data import IterableDataset
 import json
 import copy
 import os
+from typing import Dict, Optional
+
+from polarbert.dataset_utils import _safe_dtype, _safe_memmap, _validate_memory_mapping, _validate_kaggle_targets
 
 class IceCubeDataset(IterableDataset):
-    """IceCube event dataset using memory-mapped files for efficient data loading.
-
-    This dataset handles IceCube detector events using memory-mapped numpy arrays
-    for efficient sequential data access with minimal memory overhead.
-
-    Data Structure:
-        - Each event consists of multiple DOM activations
-        - Features are preprocessed and normalized
-        - CLS token is prepended during model processing
-
+    """
+    Kaggle dataset for memory-mapped structured arrays.
+    
+    Returns batches where x is a dictionary with 'features' and 'dom_id' keys:
+    - x['features']: (batch_size, seq_length, 3) array of [time, charge, aux]
+    - x['dom_id']: (batch_size, seq_length) array of DOM IDs (uint16)
+    
+    Unlike the Prometheus dataset, the Kaggle dataset has non-structured targets 
+    containing only neutrino direction (azimuth, zenith).
+    
     Args:
         data_dir (str): Directory containing the memory-mapped files
         batch_size (int): Number of events per batch
@@ -23,31 +27,21 @@ class IceCubeDataset(IterableDataset):
         transform (callable, optional): Transform to apply to features
         target_transform (callable, optional): Transform to apply to targets
 
-    Returns:
-        tuple: ((x, l), (y, c)) where:
-            x: Event features tensor (batch_size, seq_length, 4)
-                Features:
-                - time: (raw - 1e4) / 3e4
-                - charge: log10(raw) / 3.0
-                - auxiliary: raw - 0.5
-                - sensor_id: raw + 1
-            l: Sequence lengths (batch_size,)
-            y: Target positions (batch_size, seq_length, 2) if available
-            c: Target charges (batch_size,) if available
-
     Example:
-        >>> dataset = IceCubeDataset(
-        ...     data_dir='path/to/data',
-        ...     batch_size=1024,
-        ...     transform=lambda x: x.astype(np.float32)
-        ... )
-        >>> for (x, l), (y, c) in dataset:
-        ...     # x.shape: (1024, max_seq_len, 4)
-        ...     # l.shape: (1024,)
-        ...     # y.shape: (1024, max_seq_len, 2) if labels exist
-        ...     # c.shape: (1024,)
+        dataset = IceCubeDataset(
+            '/path/to/memmapped_data', 
+            batch_size=2048,
+            transform=None, 
+            target_transform=lambda y, c: (y.astype(np.float32), c.astype(np.float32))
+        )
+        
+        for (x, l), (y, c) in dataset:
+            features = x['features']  # Shape: (batch_size, seq_length, 3)
+            dom_ids = x['dom_id']     # Shape: (batch_size, seq_length)
     """
     def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None):
+        # target_transform is optional for Kaggle dataset (unlike Prometheus)
+        
         self.batch_size = batch_size
         self.transform = transform
         self.target_transform = target_transform
@@ -58,31 +52,45 @@ class IceCubeDataset(IterableDataset):
         
         self.has_labels = os.path.isfile(os.path.join(data_dir, 'y.npy'))
         
-        with open(os.path.join(data_dir, 'memmap_properties.json'), 'r') as f:
-            memmap_props = json.load(f)
+        try:
+            with open(os.path.join(data_dir, 'memmap_properties.json'), 'r') as f:
+                memmap_props = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            raise ValueError(f"Failed to load memmap properties: {e}")
         
-        self.x = np.memmap(
-            os.path.join(data_dir, 'x.npy'), mode='r',
+        self.x = _safe_memmap(
+            os.path.join(data_dir, 'x.npy'),
             shape=tuple(memmap_props['x']['shape']),
-            dtype=memmap_props['x']['dtype'],
+            dtype=_safe_dtype(memmap_props['x']['dtype']),
+            name='x'
         )
-        self.l = np.memmap(
-            os.path.join(data_dir, 'l.npy'), mode='r',
+        
+        # Validate the memory-mapped structured array format
+        _validate_memory_mapping(self.x)
+        
+        self.l = _safe_memmap(
+            os.path.join(data_dir, 'l.npy'),
             shape=tuple(memmap_props['l']['shape']),
-            dtype=memmap_props['l']['dtype'],
+            dtype=_safe_dtype(memmap_props['l']['dtype']),
+            name='l'
         )
-        self.c = np.memmap(
-            os.path.join(data_dir, 'c.npy'), mode='r',
+        
+        self.c = _safe_memmap(
+            os.path.join(data_dir, 'c.npy'),
             shape=tuple(memmap_props['c']['shape']),
-            dtype=memmap_props['c']['dtype'],
+            dtype=_safe_dtype(memmap_props['c']['dtype']),
+            name='c'
         )
         
         if self.has_labels:
-            self.y = np.memmap(
-                os.path.join(data_dir, 'y.npy'), mode='r',
+            self.y = _safe_memmap(
+                os.path.join(data_dir, 'y.npy'),
                 shape=tuple(memmap_props['y']['shape']),
-                dtype=memmap_props['y']['dtype'],
+                dtype=_safe_dtype(memmap_props['y']['dtype']),
+                name='y'
             )
+            # Validate Kaggle targets (non-structured, should be 2D with azimuth/zenith)
+            _validate_kaggle_targets(self.y)
         else:
             self.y = None
             
@@ -92,11 +100,18 @@ class IceCubeDataset(IterableDataset):
         self.start = start
         self.end = end
         self.SEQ_LENGTH = self.x.shape[1]
-        self.N_FEATURES = self.x.shape[2]
 
     def __len__(self):
         return (self.end - self.start) // self.batch_size - 1
-
+    
+    @staticmethod
+    def _unpack_features(x: np.ndarray) -> Dict[str, np.ndarray]:
+        # Note: Field validation is performed once during initialization by _validate_memory_mapping()
+        return {
+            'features': structured_to_unstructured(x[['time', 'charge', 'aux']], dtype=np.float16, casting='safe'),
+            'dom_id': x['dom_id'],
+        }
+    
     def __iter__(self):
         def generator():
             Nevents = self.x.shape[0]
@@ -107,14 +122,14 @@ class IceCubeDataset(IterableDataset):
             for idx in batch_start_indices:
                 assert(idx >= self.start)
                 assert(idx + self.batch_size <= self.end)
-                x = self.x[idx:idx+self.batch_size,:,:]
+                x = self._unpack_features(self.x[idx:idx+self.batch_size,:])
                 l = self.l[idx:idx+self.batch_size]
                 
                 if self.transform:
                     x, l = self.transform(x, l)
                 
                 if self.has_labels:
-                    y = self.y[idx:idx+self.batch_size,:]
+                    y = self.y[idx:idx+self.batch_size]  # Keep 2D shape for Kaggle (azimuth, zenith)
                     c = self.c[idx:idx+self.batch_size]
                     if self.target_transform:
                         y, c = self.target_transform(y, c)
@@ -124,8 +139,10 @@ class IceCubeDataset(IterableDataset):
         return generator()
     
     def slice(self, start, end):
-        if end is None:
+        if end is None or end > self.x.shape[0]:
             end = self.x.shape[0]
+        assert(end > start)
+        assert(start >= 0)
         slc = copy.copy(self) # Shallow copy
         slc.start = start
         slc.end = end
