@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from torch.utils.data import IterableDataset
 import json
 import copy
@@ -101,35 +100,3 @@ class IceCubeDataset(IterableDataset):
         slc.start = start
         slc.end = end
         return slc
-
-
-from torch.utils.data import DataLoader
-
-def train_validation_loaders(dataset, train_ratio=0.8, pin_memory=False, persistent_workers=True):
-    """
-    usage example:
-
-    train_dataloader, val_dataloader = train_validation_loaders(
-    dataset,
-    train_ratio = TRAIN_RATIO,
-    pin_memory=True,
-    )
-    """
-
-    #val_size = len(dataset) - train_size
-    total_batches = len(dataset)
-    train_batches = int(train_ratio * total_batches)
-    val_batches = total_batches - train_batches
-    train_size = train_batches * dataset.batch_size
-    val_size = val_batches * dataset.batch_size
-    #train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-    train_dataset = dataset.slice(0, train_size)
-    val_dataset = dataset.slice(train_size, train_size+val_size)
-    # Note: the split is not random anymore
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=None, num_workers=1,
-        pin_memory=pin_memory, persistent_workers=persistent_workers)
-    val_dataloader = DataLoader(
-        val_dataset, batch_size=None, num_workers=1,
-        pin_memory=pin_memory, persistent_workers=persistent_workers)
-    return train_dataloader, val_dataloader
