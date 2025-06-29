@@ -119,11 +119,6 @@ class DirectionalHead(PredictionHead):
         return loss
     
     @staticmethod
-    def target_transform(y, c):
-        warn('DirectionalHead.target_transform is deprecated and will be removed in future versions. Use target_transform_prometheus instead.', DeprecationWarning)
-        return DirectionalHead.target_transform_prometheus(y, c)
-
-    @staticmethod
     def target_transform_prometheus(y, c):
         y = np.vstack([y['initial_state_azimuth'].astype(np.float32), y['initial_state_zenith'].astype(np.float32)]).T
         return y, c.astype(np.float32)
@@ -161,11 +156,6 @@ class EnergyRegressionHead(PredictionHead):
         loss = nn.MSELoss()(y_truth, y_pred)
         return loss
     
-    @staticmethod
-    def target_transform(y, c):
-        warn('EnergyRegressionHead.target_transform is deprecated and will be removed in future versions. Use target_transform_prometheus instead.', DeprecationWarning)
-        return EnergyRegressionHead.target_transform_prometheus(y, c)
-        
     @staticmethod
     def target_transform_prometheus(y, c):
         y = np.log10(y['initial_state_energy'].astype(np.float32))
