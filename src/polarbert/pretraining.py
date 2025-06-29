@@ -97,18 +97,23 @@ def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
 
     return callbacks
 
-def default_transform(x, l):
-    return x.astype(np.float32), l.astype(np.float32)
+def default_transform(x: Dict[str, np.ndarray], l: np.ndarray) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    x = {
+        'features': x['features'].astype(np.float32),
+        'dom_id': x['dom_id'].astype(np.int64),
+    }
+    return x, l.astype(np.int64)
 
 def add_random_time_offset(std: float) -> Callable:
-    def _add_random_time_offset(x, l):
-        time_offset = np.random.normal(0, std, (x.shape[0], 1))
-        x = x.copy().astype(np.float32)
-        x[:,:,0] += time_offset
-        return x, l.astype(np.float32)
+    def _add_random_time_offset(x: Dict[str, np.ndarray], l: np.ndarray) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+        x, l = default_transform(x, l)
+        x['features'] = x['features'].copy()
+        time_offset = np.random.normal(0, std, (x['features'].shape[0], 1))
+        x['features'][:,:,0] += time_offset
+        return x, l
     return _add_random_time_offset
 
-def default_target_transform(y, c):
+def default_target_transform(y: np.ndarray, c: np.ndarray) -> Tuple[Optional[np.ndarray], np.ndarray]:
     return None, c.astype(np.float32)
 
 def get_dataloaders(

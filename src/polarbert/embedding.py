@@ -20,24 +20,28 @@ class IceCubeEmbedding(nn.Module):
 
     def forward(self, input):
         x, l = input  # l is the sequence length for each sample in the batch
-        batch_size, max_seq_len, _ = x.shape
+        other_features = x['features']
+        dom_ids = x['dom_id']
+        batch_size, max_seq_len = other_features.shape[:2]
+        assert dom_ids.shape == (batch_size, max_seq_len)
+        device = other_features.device
+        assert dom_ids.device == device
         
         # Create padding mask
-        padding_mask = torch.arange(max_seq_len, device=x.device)[None, :] >= l[:, None]
+        padding_mask = torch.arange(max_seq_len, device=device)[None, :] >= l[:, None]
         
         # DOM embeddings
-        dom_embeds = self.dom_embedding(x[:, :, -1].long())
+        dom_embeds = self.dom_embedding(dom_ids)
         
         # Masking
         if self.masking:
-            auxiliary_mask = x[:, :, 2] == -0.5
+            auxiliary_mask = other_features[:, :, 2] < 0 # More robust than == -0.5. Values can only be ±1/2
             mask_prob = self.mask_prob if self.training else self.val_mask_prob
-            random_mask = torch.rand(auxiliary_mask.shape, device=x.device) < mask_prob
+            random_mask = torch.rand(auxiliary_mask.shape, device=device) < mask_prob
             mask = auxiliary_mask & random_mask & ~padding_mask
-            dom_embeds[mask] = self.dom_embedding(torch.tensor(self.mask_idx, device=x.device))
+            dom_embeds[mask] = self.dom_embedding(torch.tensor(self.mask_idx, device=device))
         
         # Other features embedding
-        other_features = x[:, :, :3]
         features_embeds = self.features_embedding(other_features)
         
         # Concatenate embeddings
@@ -47,6 +51,6 @@ class IceCubeEmbedding(nn.Module):
         full_embedding = torch.cat([self.cls_embedding.expand(batch_size, -1, -1), combined_embeds], dim=1)
         
         # Update padding mask to account for CLS token
-        padding_mask = torch.cat([torch.zeros(batch_size, 1, device=x.device, dtype=torch.bool), padding_mask], dim=1)
+        padding_mask = torch.cat([torch.zeros(batch_size, 1, device=device, dtype=torch.bool), padding_mask], dim=1)
         
         return full_embedding, padding_mask, mask if self.masking else None

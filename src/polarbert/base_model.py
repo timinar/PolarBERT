@@ -41,7 +41,7 @@ class SimpleTransformer(pl.LightningModule):
         logits, mask, charge_hat, padding_mask = self(inp)
         x, l = inp
         _, charge = y
-        loss = self.masked_prediction_loss(logits, x[:, :, 3].long(), mask, padding_mask)
+        loss = self.masked_prediction_loss(logits, x['dom_id'], mask, padding_mask)
         charge_loss = F.mse_loss(charge_hat.squeeze(), torch.log10(charge))
         return loss, charge_loss
 
