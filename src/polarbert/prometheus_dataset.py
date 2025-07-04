@@ -133,11 +133,24 @@ class IceCubeDataset(IterableDataset):
         return generator()
     
     def slice(self, start, end):
-        if end is None or end > self.x.shape[0]:
-            end = self.x.shape[0]
-        assert(end > start)
-        assert(start >= 0)
+        # Convert relative indices to absolute indices
+        abs_start = self.start + start
+        
+        if end is None:
+            abs_end = self.end  # Use current slice's end
+        else:
+            abs_end = self.start + end
+        
+        # Ensure we don't go beyond the current slice or original dataset
+        if abs_end > self.end:
+            abs_end = self.end
+        if abs_end > self.x.shape[0]:
+            abs_end = self.x.shape[0]
+            
+        assert(abs_end > abs_start)
+        assert(abs_start >= 0)
+        
         slc = copy.copy(self) # Shallow copy
-        slc.start = start
-        slc.end = end
+        slc.start = abs_start
+        slc.end = abs_end
         return slc
