@@ -93,6 +93,11 @@ class IceCubeDataset(IterableDataset):
     def __len__(self):
         return (self.end - self.start) // self.batch_size - 1
     
+    @property
+    def num_events(self):
+        """Return the number of events (not batches) in this dataset."""
+        return self.end - self.start
+    
     @staticmethod
     def _unpack_features(x: np.ndarray) -> Dict[str, np.ndarray]:
         # Note: Field validation is performed once during initialization by _validate_memory_mapping()
