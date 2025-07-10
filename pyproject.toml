@@ -1,0 +1,9 @@
+[tool.ruff]
+# Disable E741 (ambiguous variable name) to allow single-letter variables
+# that match mathematical equations
+ignore = ["E741"]
+
+[tool.ruff.lint]
+# You can add other linting rules here if needed
+select = ["E", "F", "W"]
+ignore = ["E741"] 
