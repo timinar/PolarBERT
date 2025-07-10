@@ -40,6 +40,8 @@ class IceCubeEmbedding(nn.Module):
             random_mask = torch.rand(auxiliary_mask.shape, device=device) < mask_prob
             mask = auxiliary_mask & random_mask & ~padding_mask
             dom_embeds[mask] = self.dom_embedding(torch.tensor(self.mask_idx, device=device))
+        else:
+            mask = None
         
         # Other features embedding
         features_embeds = self.features_embedding(other_features)

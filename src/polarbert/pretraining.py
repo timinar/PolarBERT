@@ -41,7 +41,7 @@ def load_and_process_config(config_path: str) -> Dict[str, Any]:
     return config
 
 def setup_callbacks(config: Dict[str, Any], model_name: str) -> list:
-    callbacks = [LearningRateMonitor(logging_interval='step')]
+    callbacks: list = [LearningRateMonitor(logging_interval='step')]
     
     # Get checkpoint config with defaults
     checkpoint_config = config['training'].get('checkpoint', {})
