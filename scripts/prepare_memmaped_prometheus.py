@@ -9,12 +9,125 @@ import os
 from pathlib import Path
 import json
 from typing import Optional, Dict, List
-from prometheus.sensor_mapping import SensorMapping
+# from prometheus.sensor_mapping import SensorMapping
+from scipy.spatial import cKDTree
+import pandas as pd
+# TODO fix it, cf # scripts/prepare_memmaped_orca.py
 import re
 
 BATCH_SIZE = 25_000  # Adjusted to match events per parquet file
 SEQ_LENGTH = 127
 N_FEATURES = 4  # time, charge, aux, dom_id
+
+
+
+class SensorMapping:
+    """
+    Handles mapping of pulse coordinates to sensor IDs using a geometry file.
+    Uses a KD-tree for efficient nearest neighbor search.
+    """
+    def __init__(self, geometry_file: str):
+        """
+        Initialize the sensor mapping with geometry file.
+        
+        Args:
+            geometry_file: Path to sensor_geometry.csv. This file should contain
+                           columns 'x', 'y', 'z', and optionally 'sensor_id'.
+                           If 'sensor_id' is not present, row numbers are used as 0-indexed IDs.
+        """
+        print(f"SensorMapping: Loading geometry from {geometry_file}")
+        try:
+            self.sensor_geometry = pd.read_csv(geometry_file)
+        except Exception as e:
+            raise FileNotFoundError(f"Could not read geometry file: {geometry_file}. Error: {e}")
+
+        if not {'x', 'y', 'z'}.issubset(self.sensor_geometry.columns):
+            raise ValueError("Geometry CSV must contain 'x', 'y', 'z' columns.")
+
+        self.geometry_coords = self.sensor_geometry[['x', 'y', 'z']].values
+        
+        # Determine sensor IDs: use 'sensor_id' column if present, otherwise use DataFrame index
+        if 'sensor_id' in self.sensor_geometry.columns:
+            self.sensor_ids_map = self.sensor_geometry['sensor_id'].values
+            print("SensorMapping: Using 'sensor_id' column from geometry file for mapping.")
+        else:
+            self.sensor_ids_map = self.sensor_geometry.index.values
+            print("SensorMapping: Using row index from geometry file as 'sensor_id' for mapping.")
+
+        self.kdtree = None # Will be initialized by initialize_mapping
+        self.z_offset = 0.0 # Default z_offset
+        print(f"SensorMapping: Loaded {len(self.geometry_coords)} sensor positions.")
+        
+    def calculate_z_offset(self, data_file_path: str) -> float:
+        """
+        Calculate Z offset by comparing the center of Z distributions
+        between a sample pulse data file and the geometry file.
+        """
+        print(f"SensorMapping: Calculating Z-offset using pulse data from: {data_file_path}")
+        try:
+            sample_data = pq.read_table(data_file_path, columns=['sensor_pos_z'])
+            data_z = sample_data['sensor_pos_z'].to_numpy()
+            if len(data_z) == 0:
+                print("SensorMapping: Warning - No 'sensor_pos_z' data in the sample file for Z-offset calibration.")
+                return 0.0
+            
+            z_prom_min, z_prom_max = np.min(data_z), np.max(data_z)
+            z_prom_center = (z_prom_max + z_prom_min) / 2
+            
+            geom_z_min, geom_z_max = np.min(self.geometry_coords[:,2]), np.max(self.geometry_coords[:,2])
+            z_geom_center = (geom_z_max + geom_z_min) / 2
+            
+            calculated_offset = z_prom_center - z_geom_center
+            print(f"SensorMapping: Prometheus Z center: {z_prom_center:.2f}, Geometry Z center: {z_geom_center:.2f}, Calculated Z-offset: {calculated_offset:.2f}")
+            return calculated_offset
+        except Exception as e:
+            print(f"SensorMapping: Warning - Error during Z-offset calculation: {e}. Using Z-offset of 0.")
+            return 0.0
+    
+    def initialize_mapping(self, pulse_data_file_path: Optional[str] = None) -> None:
+        """
+        Initialize the KD-tree with an optional Z-offset calibration.
+        The Z-offset adjusts the geometry coordinates before building the KD-tree.
+        """
+        if pulse_data_file_path is not None:
+            self.z_offset = self.calculate_z_offset(pulse_data_file_path)
+        else:
+            self.z_offset = 0.0 # No offset if no pulse data file is provided
+            print("SensorMapping: No pulse data file provided for Z-offset calibration. Using Z-offset of 0.")
+            
+        # Adjust geometry coordinates with the determined z_offset
+        adjusted_geom_coords = self.geometry_coords.copy()
+        adjusted_geom_coords[:, 2] -= self.z_offset # Apply correction: if prom_z = geom_z_adjusted + offset, then geom_z_adjusted = prom_z - offset. Here, we adjust geom_z.
+                                                 # If pulse data Z is higher, offset is positive. We need to subtract it from geometry's Z to match.
+
+        # Create KD-tree for efficient lookups using the (potentially) Z-adjusted geometry coordinates
+        self.kdtree = cKDTree(adjusted_geom_coords)
+        print(f"SensorMapping: Initialized KD-tree with {len(adjusted_geom_coords)} sensors. Applied Z-offset: {self.z_offset:.2f} meters.")
+    
+    def coords_to_sensor_ids(self, coords: np.ndarray) -> np.ndarray:
+        """
+        Convert an array of (x, y, z) pulse coordinates to 0-indexed sensor IDs.
+        
+        Args:
+            coords: NumPy array of shape (N, 3) containing x,y,z coordinates of pulses.
+            
+        Returns:
+            NumPy array of 0-indexed sensor IDs corresponding to the input coordinates.
+        """
+        if self.kdtree is None:
+            # Automatically initialize if not done, but without Z-offset calibration
+            print("SensorMapping: Warning - KD-tree not initialized. Initializing now without Z-offset calibration from pulse data.")
+            self.initialize_mapping(prometheus_file=None) # Initialize with z_offset = 0
+            # raise RuntimeError("SensorMapping KD-tree not initialized. Call initialize_mapping first.")
+            
+        # Query the KD-tree to find the nearest sensor in the (Z-adjusted) geometry for each pulse coordinate
+        distances, indices_in_geometry = self.kdtree.query(coords, k=1)
+        
+        # 'indices_in_geometry' are the row numbers from the geometry file.
+        # Map these row numbers to the actual sensor IDs using self.sensor_ids_map
+        mapped_sensor_ids = self.sensor_ids_map[indices_in_geometry]
+        return mapped_sensor_ids
+
 
 class DataSource:
     PULSES = 'pulses'
@@ -35,6 +148,12 @@ class DataSource:
             DataSource.PULSES_NO_NOISE: (225, 344),
             DataSource.MERGED_PHOTONS: (0, 224)
         }
+        # water
+        # ranges = {
+        #     DataSource.PULSES: (803, 818),
+        #     DataSource.PULSES_NO_NOISE: (699, 818),
+        #     DataSource.MERGED_PHOTONS: (0, 698)
+        # }
         return ranges.get(source)
 
 class PrometheusMetadata:
@@ -291,10 +410,13 @@ if __name__ == '__main__':
     # Use home directory instead of hardcoded paths
     HOME = Path.home()
     BASE_PATH = HOME / 'prometheus_data2'
+    # BASE_PATH = HOME / 'water_icecube'
     
     # Process each data source
-    for data_source in [DataSource.PULSES, DataSource.PULSES_NO_NOISE, DataSource.MERGED_PHOTONS]:
+    # for data_source in [DataSource.PULSES, DataSource.PULSES_NO_NOISE, DataSource.MERGED_PHOTONS]:
+    for data_source in [DataSource.PULSES]:
         OUTPUT_DIR = HOME / f'prometheus_data_updated/memmaped_{data_source}'
+        # OUTPUT_DIR = HOME / f'water_icecube/memmaped_{data_source}'
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         
         # Initialize sensor mapping
