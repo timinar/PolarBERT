@@ -1,9 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polarbert"
+version = "0.1.0"
+authors = [
+  { name="Inar Timiryasov", email="timinar@gmail.com" },
+  { name="Jean-Loup Tastet", email="jeta@di.ku.dk" },
+]
+description = "PolarBERT - A foundation model for IceCube"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "pytorch-lightning>=2.0.0",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "tqdm",
+    "pyyaml",
+    "wandb",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/timinar/PolarBERT"
+
 [tool.ruff]
-# Disable E741 (ambiguous variable name) to allow single-letter variables
-# that match mathematical equations
-ignore = ["E741"]
+# Exclude the same directories as in pyrightconfig.json
+exclude = [
+    "**/__pycache__/",
+    "**/.*",
+    "backup/",
+    "configs/",
+    "documents/",
+    "logs/",
+    "src/polarbert/checkpoints/",
+    "src/polarbert/wandb/",
+    "tables/"
+]
 
 [tool.ruff.lint]
-# You can add other linting rules here if needed
+# Enable the default set of rules
 select = ["E", "F", "W"]
-ignore = ["E741"] 
+
+# Ignore some specific rules
+ignore = ["E501", "E741", "W291", "W292", "W293"]
