@@ -6,10 +6,12 @@ import pytorch_lightning as pl
 from torch.optim.lr_scheduler import OneCycleLR
 from polarbert.embedding import IceCubeEmbedding
 
+
 class SimpleTransformer(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.is_mup_enabled = False # Base model does not support muP
         self.embedding = IceCubeEmbedding(config, masking=True)
         
         # Skip transformer creation if the flag is set
@@ -67,7 +69,7 @@ class SimpleTransformer(pl.LightningModule):
         loss = (loss * mask).sum(axis=1) / (mask.sum(axis=1) + eps)
         loss = loss.mean()
         return loss
-    
+
     def configure_optimizers(self):
         return _configure_optimizers(self.config, self.parameters())
 
