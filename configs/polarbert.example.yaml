@@ -7,8 +7,10 @@ data:
   pin_memory: false
   num_workers: 1 # Should remain 1 when using an IterableDataset
   persistent_workers: true
+  sensor_geometry_path: '/groups/pheno/inar/icecube_kaggle/sensor_geometry.csv'
 
 model:
+  use_dom_positions: True  # Different type of embedding -- uses coordinates directly
   embedding_dim: 256
   dom_embed_dim: 128
   num_heads: 8

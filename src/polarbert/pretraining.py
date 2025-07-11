@@ -235,8 +235,8 @@ def main():
     parser.add_argument('--config', type=str, default='../configs/basic_transformer.yaml')
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
-    parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
-    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'])
+    parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='flash')
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     args = parser.parse_args()
 
     # Load and process config
