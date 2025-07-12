@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--job_id", type=str, default=None)
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='flash')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
+    parser.add_argument("--watch", action='store_true')
     args = parser.parse_args()
 
     # Load and process config
@@ -89,6 +90,10 @@ def main():
     model = model_class(config)
     print(f"Using {model_name} model")
     print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')
+
+    # Log gradient & parameter histograms, as well as model topology
+    if args.watch:
+        wandb_logger.watch(model, log='all')
     
     # Setup training with flexible validation interval
     val_interval = config['training'].get('val_check_interval', 1.0)
@@ -105,6 +110,10 @@ def main():
     )
 
     trainer.fit(model, train_loader, val_loader)
+
+    # Remove W&B hook if the --watch option was passed
+    if args.watch:
+        wandb_logger.experiment.unwatch(model)
 
 if __name__ == '__main__':
     main()
