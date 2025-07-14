@@ -78,7 +78,7 @@ class PredictionHead(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        self.log('val/loss', loss, prog_bar=True)
+        self.log('val/full_loss', loss, prog_bar=True)
         return loss
     
     def configure_optimizers(self):
@@ -201,12 +201,12 @@ def load_pretrained_model(config: Dict[str, Any]):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('task', type=str, choices=['direction', 'energy'])
+    parser.add_argument('--task', type=str, choices=['direction', 'energy'], default='direction')
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument("--job_id", type=str, default=None)
-    parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='base')
-    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='prometheus')
+    parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='flash')
+    parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     args = parser.parse_args()
 
