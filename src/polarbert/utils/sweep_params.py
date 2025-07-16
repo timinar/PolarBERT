@@ -22,4 +22,8 @@ SWEEP_PARAMS = {
     'pct_start': ('training', 'pct_start'),
     'div_factor': ('training', 'div_factor'),
     'final_div_factor': ('training', 'final_div_factor'),
+    # muP
+    'mup_init_std': ('training', 'mup_init_std'),
+    'mup_input_alpha': ('training', 'mup_input_alpha'),
+    'mup_output_alpha': ('training', 'mup_output_alpha'),
 }
