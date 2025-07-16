@@ -6,7 +6,7 @@ import inspect
 
 
 def _is_mup_enabled(config: dict) -> bool:
-    return config['model'].get('mup', False) and config['training']['mup'].get('enabled', False)
+    return config['training'].get('mup', {}).get('enabled', False)
 
 
 class Attention(nn.Module):
