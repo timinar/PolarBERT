@@ -3,6 +3,7 @@ import torch.nn as nn
 from polarbert.base_model import SimpleTransformer
 from torch.optim.lr_scheduler import OneCycleLR
 import inspect
+from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
 
 
 def _is_mup_enabled(config: dict) -> bool:
@@ -156,6 +157,8 @@ class FlashTransformer(SimpleTransformer):
             initial_lr = float(self.config['training']['initial_lr'])
         elif self.config['training']['lr_scheduler'] == 'onecycle':
             initial_lr = float(self.config['training']['max_lr']) / float(self.config['training']['div_factor'])
+        elif self.config['training']['lr_scheduler'] == 'trapezoidal':
+            initial_lr = float(self.config['training']['max_lr'])
         else:
             raise ValueError(f"Unknown scheduler: {self.config['training']['lr_scheduler']}")
         weight_decay = float(self.config['training']['weight_decay'])
@@ -192,10 +195,6 @@ class FlashTransformer(SimpleTransformer):
             num_mup_decay_params = sum(p.numel() for p in mup_decay_params)
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
-            # TODO: remove print statements after debugging
-            print(f"num mup decayed parameter tensors: {len(mup_decay_params)}, with {num_mup_decay_params:,} parameters")
-            print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-            print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         else:
             decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
             nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
@@ -209,10 +208,8 @@ class FlashTransformer(SimpleTransformer):
             ]
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
-            # TODO: remove print statements after debugging
-            print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-            print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
 
+        # TODO: refactor into a reusable function
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and self.device.type == 'cuda'
@@ -229,14 +226,14 @@ class FlashTransformer(SimpleTransformer):
             fused=use_fused
         )
 
-        # TODO: remove print statements after debugging
-        print(f"using fused AdamW: {use_fused}")
-
+        # TODO: refactor into a reusable function
+        total_steps = self.config['training']['total_steps']
         if self.config['training']['lr_scheduler'] == 'constant':
             return optimizer
         elif self.config['training']['lr_scheduler'] == 'onecycle':
+            if total_steps is None:
+                raise ValueError("total_steps must be specified in config for onecycle scheduler")
             # Use the pre-calculated total_steps from config
-            total_steps = self.config['training']['total_steps']
             scheduler = OneCycleLR(
                 optimizer,
                 max_lr=float(self.config['training']['max_lr']),
@@ -247,5 +244,15 @@ class FlashTransformer(SimpleTransformer):
                 anneal_strategy='cos'
             )
             return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
+        elif self.config['training']['lr_scheduler'] == 'trapezoidal':
+            if total_steps is None:
+                raise ValueError("total_steps must be specified in config for trapezoidal scheduler")
+            scheduler = TrapezoidalLR(
+                optimizer,
+                warmup_steps=self.config['training']['warmup_steps'],
+                decay_steps=self.config['training']['decay_steps'],
+                total_steps=total_steps
+            )
+            return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
         else:
-            assert False
+            raise ValueError(f"Unknown scheduler: {self.config['training']['lr_scheduler']}")
