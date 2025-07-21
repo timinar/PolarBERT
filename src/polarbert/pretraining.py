@@ -14,7 +14,7 @@ from polarbert.utils.data import (
 )
 from polarbert.utils.training import update_training_steps, compute_batch_params
 from polarbert.utils.callbacks import setup_callbacks
-from polarbert.utils.sweep_params import SWEEP_PARAMS
+from polarbert.utils.sweep_params import update_config_for_wandb_sweep
 
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
@@ -25,8 +25,6 @@ MODEL_CLASSES = {
     'swiglu': (SwiGLUTransformer, "SwiGLU Transformer"),
     'base': (SimpleTransformer, "Base Transformer")
 }
-
-
 
 
 def main():
@@ -56,15 +54,7 @@ def main():
     )
     
     # Update config with parameters from wandb sweep
-    for param, (section, key) in SWEEP_PARAMS.items():
-        if param in wandb_logger.experiment.config:
-            config[section][key] = wandb_logger.experiment.config[param]
-    
-    # Compute dependent Adam parameters from sweep values
-    if 'one_minus_adam_beta1' in wandb_logger.experiment.config:
-        config['training']['adam_beta1'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta1']
-    if 'one_minus_adam_beta2' in wandb_logger.experiment.config:
-        config['training']['adam_beta2'] = 1.0 - wandb_logger.experiment.config['one_minus_adam_beta2']
+    update_config_for_wandb_sweep(config, wandb_logger.experiment.config)
 
     # Compute and update batch parameters
     batch_params = compute_batch_params(config)
