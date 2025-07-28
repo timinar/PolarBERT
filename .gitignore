@@ -1,6 +1,7 @@
 checkpoints/
 wandb/
 evaluation_results/
+experiments/*
 logs/
 scripts/experiments/
 tables/
