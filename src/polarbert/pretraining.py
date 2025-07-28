@@ -15,6 +15,7 @@ from polarbert.utils.data import (
 from polarbert.utils.training import update_training_steps, compute_batch_params
 from polarbert.utils.callbacks import setup_callbacks
 from polarbert.utils.sweep_params import update_config_for_wandb_sweep
+from polarbert.utils.activation_logging import ActivationLoggingCallback
 
 from polarbert.flash_model import FlashTransformer
 from polarbert.swiglu_model import SwiGLUTransformer
@@ -35,6 +36,9 @@ def main():
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='flash')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     parser.add_argument("--watch", action='store_true')
+    parser.add_argument("--log_frequency", type=int, default=100, help="Logging frequency (in steps) for W&B and activation logging")
+    parser.add_argument("--save-activations-to", type=str, default=None, 
+                        help="Path to CSV file for saving activation statistics")
     args = parser.parse_args()
 
     # Load and process config
@@ -81,16 +85,25 @@ def main():
     print(f"Using {model_name} model")
     print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')
 
-    # Log gradient & parameter histograms, as well as model topology
+    # Setup callbacks
+    callbacks = setup_callbacks(config, config['model']['model_name'])
+    
+    # Log gradient & parameter histograms, model topology, and add activation logging callback if watch is enabled
     if args.watch:
-        wandb_logger.watch(model, log='all')
+        wandb_logger.watch(model, log='all', log_freq=args.log_frequency)
+        
+        activation_callback = ActivationLoggingCallback(
+            log_frequency=args.log_frequency,
+            csv_path=args.save_activations_to,
+        )
+        callbacks.append(activation_callback)
     
     # Setup training with flexible validation interval
     val_interval = config['training'].get('val_check_interval', 1.0)
     
     trainer = Trainer(
         max_epochs=config['training']['max_epochs'],
-        callbacks=setup_callbacks(config, config['model']['model_name']),
+        callbacks=callbacks,
         accelerator='gpu',
         devices=config['training']['gpus'],
         precision=config['training']['precision'],
