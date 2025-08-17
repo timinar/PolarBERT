@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import OneCycleLR
 from polarbert.embedding import IceCubeEmbedding
+from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
 
 
 class SimpleTransformer(pl.LightningModule):
@@ -80,6 +81,8 @@ def _configure_optimizers(config, parameters):
         initial_lr = float(config['training']['initial_lr'])
     elif config['training']['lr_scheduler'] == 'onecycle':
         initial_lr = float(config['training']['max_lr']) / float(config['training']['div_factor'])
+    elif config['training']['lr_scheduler'] == 'trapezoidal':
+        initial_lr = float(config['training']['max_lr'])
     else:
         raise ValueError(f"Unknown scheduler: {config['training']['lr_scheduler']}")
     
@@ -95,11 +98,14 @@ def _configure_optimizers(config, parameters):
         amsgrad=bool(config['training'].get('amsgrad', False))
     )
 
+    # FIXME: the code below is completely redundant with some code in flash_model.py. Needs to be factored out
+    total_steps = config['training'].get('total_steps')
     if config['training']['lr_scheduler'] == 'constant':
         return optimizer
     elif config['training']['lr_scheduler'] == 'onecycle':
+        if total_steps is None:
+            raise ValueError("total_steps must be specified in config for onecycle scheduler")
         # Use the pre-calculated total_steps from config
-        total_steps = config['training']['total_steps']
         scheduler = OneCycleLR(
             optimizer,
             max_lr=float(config['training']['max_lr']),
@@ -110,5 +116,15 @@ def _configure_optimizers(config, parameters):
             anneal_strategy='cos'
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
+    elif config['training']['lr_scheduler'] == 'trapezoidal':
+        if total_steps is None:
+            raise ValueError("total_steps must be specified in config for trapezoidal scheduler")
+        scheduler = TrapezoidalLR(
+            optimizer,
+            warmup_steps=config['training']['warmup_steps'],
+            decay_steps=config['training']['decay_steps'],
+            total_steps=total_steps
+        )
+        return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
     else:
-        assert False
+        assert False, f"Unknown scheduler: {config['training']['lr_scheduler']}"

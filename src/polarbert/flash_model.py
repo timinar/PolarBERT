@@ -227,7 +227,7 @@ class FlashTransformer(SimpleTransformer):
         )
 
         # TODO: refactor into a reusable function
-        total_steps = self.config['training']['total_steps']
+        total_steps = self.config['training'].get('total_steps')
         if self.config['training']['lr_scheduler'] == 'constant':
             return optimizer
         elif self.config['training']['lr_scheduler'] == 'onecycle':
