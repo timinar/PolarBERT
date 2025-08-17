@@ -78,7 +78,7 @@ class PredictionHead(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        self.log('val/full_loss', loss, prog_bar=True)
+        self.log('val/loss', loss, prog_bar=True)
         return loss
     
     def configure_optimizers(self):
