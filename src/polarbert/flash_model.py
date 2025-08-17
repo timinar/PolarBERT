@@ -211,8 +211,9 @@ class FlashTransformer(SimpleTransformer):
 
         # TODO: refactor into a reusable function
         # Create AdamW optimizer and use the fused version if it is available
+        use_fused_if_available = self.config['training'].get('use_fused_if_available', False)
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and self.device.type == 'cuda'
+        use_fused = use_fused_if_available and fused_available and self.device.type == 'cuda'
         optimizer = torch.optim.AdamW(
             optim_groups,
             lr=initial_lr,
