@@ -110,6 +110,7 @@ def main():
         gradient_clip_val=config['training']['gradient_clip_val'],
         logger=wandb_logger,
         val_check_interval=val_interval,  # Can be float (fraction of epoch) or int (number of steps)
+        accumulate_grad_batches=config['training']['gradient_accumulation_steps'],
     )
 
     trainer.fit(model, train_loader, val_loader)

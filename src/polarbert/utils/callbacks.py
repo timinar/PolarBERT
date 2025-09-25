@@ -3,6 +3,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from pathlib import Path
+from polarbert.utils.coordinate_checking import CoordinateCheckingCallback
 
 
 def setup_callbacks(config: dict[str, Any], model_name: str) -> list:
@@ -59,5 +60,9 @@ def setup_callbacks(config: dict[str, Any], model_name: str) -> list:
             check_finite=True,
         )
         callbacks.append(early_stopping_callback)
+
+    if 'mup' in config['training'] and config['training']['mup'].get('check_coordinates', False):
+        coordinate_checking_callback = CoordinateCheckingCallback(checkpoint_dir)
+        callbacks.append(coordinate_checking_callback)
 
     return callbacks

@@ -300,6 +300,7 @@ def main():
         enable_model_summary=True,
         deterministic=False,  # Add this for better performance
         gradient_clip_algorithm='norm',  # Add this for better stability
+        accumulate_grad_batches=config['training']['gradient_accumulation_steps'],
     )
 
     trainer.fit(model, train_loader, val_loader)
