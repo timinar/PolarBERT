@@ -490,6 +490,14 @@ def augment_batch_with_z_translations(batch_data: Tuple[Dict[str, torch.Tensor],
         translated_labels = []
         successful_translations = []
         
+        # Add the original event as the first sample (translation = 0.0)
+        translated_events.append({
+            'dom_id': event_data['dom_id'].unsqueeze(0),
+            'features': event_data['features'].unsqueeze(0)
+        })
+        translated_labels.append(labels[event_idx].unsqueeze(0))
+        successful_translations.append(0.0)
+        
         for translation_z in translations:
             translated_event = translate_event_z_axis(
                 event_data, positions_normalized, dom_to_string_map, translation_z
