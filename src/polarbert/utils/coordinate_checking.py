@@ -75,10 +75,6 @@ class CoordinateCheckingCallback(Callback):
         self._append_average_values_to_dict()
 
     def on_train_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        # Log any remaining staged values that haven't been logged yet
-        # This handles the case where training ends mid-accumulation cycle
-        self._append_average_values_to_dict()
-
         # Clean up hooks
         for handle in self.coord_check_handles:
             handle.remove()
