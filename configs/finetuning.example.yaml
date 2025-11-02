@@ -21,17 +21,18 @@ training:
   mask_prob: 0.0 # No masking for finetuning
   max_epochs: 20
   logical_batch_size: 200 # Batch size used for training (will use gradient accumulation if necessary)
-  max_lr: 1.5e-5
-  adam_beta1: 0.92
-  adam_beta2: 0.9998
-  adam_eps: 3e-7
+  max_lr: 7e-4  # the main lr for the schedule-free option
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_eps: 1e-8
   weight_decay: 0.0
+  warm_up_steps: 0  # for schedule-free
   amsgrad: false
   lr_scheduler: 'onecycle'
 
-  pct_start: 0.01
-  div_factor: 25.0
-  final_div_factor: 1e4
+  pct_start: 0.01 # not used by schedule-free
+  div_factor: 25.0  # not used by schedule-free
+  final_div_factor: 1e4 # not used by schedule-free
   project: 'PolarBERT-finetuning'
   
   gpus: 1
