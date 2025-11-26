@@ -40,12 +40,20 @@ class SimpleTransformerCls(pl.LightningModule):
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
+        
+        # Optional final LayerNorm (for compatibility with muP-trained models)
+        self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
+        if self.use_final_layer_norm:
+            self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
 
     def forward(self, x):
         embeddings, padding_mask, _ = self.embedding(x)
         
         for block in self.transformer_blocks:
             embeddings = block(embeddings, padding_mask)
+        
+        if self.use_final_layer_norm:
+            embeddings = self.final_layer_norm(embeddings)
         
         return embeddings[:, 0, :]  # Return CLS token
     
@@ -188,8 +196,11 @@ def load_pretrained_model(config: Dict[str, Any]):
     
     # Filter state dict to only include embedding and transformer blocks
     filtered_state = {}
+    use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
     for key, value in pretrained_state.items():
         if key.startswith('embedding.') or key.startswith('transformer_blocks.'):
+            filtered_state[key] = value
+        elif key.startswith('final_layer_norm.') and use_final_layer_norm:
             filtered_state[key] = value
     
     # Load filtered state dict
@@ -293,7 +304,7 @@ def main():
         ],
         accelerator='gpu',
         devices=config['training']['gpus'],
-        precision='16-mixed',
+        precision=config['training'].get('precision', '16-mixed'),
         gradient_clip_val=config['training']['gradient_clip_val'],
         logger=wandb_logger,
         val_check_interval=config['training'].get('val_check_interval', 1.0),

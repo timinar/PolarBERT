@@ -96,7 +96,11 @@ class FlashTransformer(SimpleTransformer):
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
-        self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
+        
+        # Optional final LayerNorm (can be disabled for ablation experiments)
+        self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
+        if self.use_final_layer_norm:
+            self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
 
         # Initialise weights for muP
         if self.is_mup_enabled:
@@ -126,7 +130,8 @@ class FlashTransformer(SimpleTransformer):
         for block in self.transformer_blocks:
             embeddings = block(embeddings, padding_mask)
 
-        embeddings = self.final_layer_norm(embeddings)
+        if self.use_final_layer_norm:
+            embeddings = self.final_layer_norm(embeddings)
 
         # muP output scaling
         if self.is_mup_enabled:
