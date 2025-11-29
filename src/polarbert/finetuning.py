@@ -183,17 +183,17 @@ def load_pretrained_model(config: Dict[str, Any]):
     if config['pretrained']['checkpoint_path'].strip().lower() == 'new':
         print("Training from scratch")
         return model
-    
+
     # Load pretrained weights from the full model
     checkpoint_path = Path(config['pretrained']['checkpoint_path'])
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
+
     pretrained_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     if 'state_dict' in pretrained_state: # PyTorch Lightning checkpoints contain extra data in addition to the state dict
         pretrained_state = pretrained_state['state_dict']
     assert 'transformer_blocks.0.feed_forward.0.weight' in pretrained_state, "State dict does not contain the expected keys. Check the checkpoint format."
-    
+
     # Filter state dict to only include embedding and transformer blocks
     filtered_state = {}
     use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
@@ -202,11 +202,37 @@ def load_pretrained_model(config: Dict[str, Any]):
             filtered_state[key] = value
         elif key.startswith('final_layer_norm.') and use_final_layer_norm:
             filtered_state[key] = value
-    
+
     # Load filtered state dict
     model.load_state_dict(filtered_state, strict=False)
     print("Loaded pretrained weights for embedding and transformer blocks")
-    
+
+    return model
+
+
+def load_full_model(config: Dict[str, Any], task: str = 'direction'):
+    """Load full finetuned model (backbone + head) for continued fine-tuning."""
+    # Create the appropriate head model
+    if task == 'direction':
+        model = DirectionalHead(config)
+    elif task == 'energy':
+        model = EnergyRegressionHead(config)
+    else:
+        raise ValueError(f'Unsupported task: {task}')
+
+    checkpoint_path = Path(config['pretrained']['checkpoint_path'])
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    # Load checkpoint
+    pretrained_state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+    if 'state_dict' in pretrained_state:
+        pretrained_state = pretrained_state['state_dict']
+
+    # Load the full state dict (including fc1, fc2, and pretrained_model.*)
+    model.load_state_dict(pretrained_state, strict=True)
+    print(f"Loaded full model from {checkpoint_path}")
+
     return model
 
 
@@ -219,6 +245,7 @@ def main():
     parser.add_argument("--model_type", type=str, choices=list(MODEL_CLASSES.keys()), default='flash')
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
+    parser.add_argument("--continue_finetuning", action="store_true", help="Continue fine-tuning from a full model checkpoint (backbone + head)")
     args = parser.parse_args()
 
     if args.dataset_type == 'kaggle' and args.task != 'direction':
@@ -261,16 +288,19 @@ def main():
             'hidden_size': 1024,
         }
     
-    # Load pretrained model
-    pretrained_model = load_pretrained_model(config)
-    
     # Initialize finetuning model
-    if args.task == 'direction':
-        model = DirectionalHead(config, pretrained_model)
-    elif args.task == 'energy':
-        model = EnergyRegressionHead(config, pretrained_model)
+    if args.continue_finetuning:
+        # Load full model for continued fine-tuning
+        model = load_full_model(config, task=args.task)
     else:
-        assert False, f'Unsupported task: {args.task}'
+        # Original behavior: load backbone and create new head
+        pretrained_model = load_pretrained_model(config)
+        if args.task == 'direction':
+            model = DirectionalHead(config, pretrained_model)
+        elif args.task == 'energy':
+            model = EnergyRegressionHead(config, pretrained_model)
+        else:
+            raise ValueError(f'Unsupported task: {args.task}')
 
     # Select the right target transform based on the dataset type
     if args.dataset_type == 'kaggle':
