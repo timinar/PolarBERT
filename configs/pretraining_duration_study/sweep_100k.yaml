@@ -1,0 +1,68 @@
+data:
+  max_per_device_batch_size: 4096
+  train_dir: '/groups/pheno/inar/icecube_kaggle/v2/memmapped_train_130M_127'
+  val_dir: '/groups/pheno/inar/icecube_kaggle/v2/memmapped_eval_1.2M_127'
+  train_events: 100000
+  val_events: 200000
+  pin_memory: false
+  num_workers: 1
+  persistent_workers: true
+  sensor_geometry_path: '/groups/pheno/inar/icecube_kaggle/sensor_geometry.csv'
+
+
+model:
+  use_dom_positions: true
+  embedding_dim: 256
+  dom_embed_dim: 128
+  num_heads: 8
+  hidden_size: 1024
+  num_layers: 8
+  lambda_charge: 1.0
+  use_final_layer_norm: true
+  directional:
+    hidden_size: 1024
+  model_name: 'pretraining_duration_sweep'
+
+training:
+  mask_prob: 0.25
+  val_mask_prob: 0.25
+  max_epochs: 20
+  logical_batch_size: 4096
+  val_check_interval: 0.5
+  gpus: 1
+  precision: "32"
+  gradient_clip_val: 1.0
+  max_lr: 0.0001
+  adam_beta1: 0.9
+  adam_beta2: 0.9998
+  adam_eps: 5e-7
+  weight_decay: 0.1
+  amsgrad: false
+  lr_scheduler: 'onecycle'
+
+  steps_per_epoch: null
+  total_steps: null
+  num_events: null
+
+  pct_start: 0.01
+  div_factor: 25.0
+  final_div_factor: 10
+  project: 'PolarBERT-pretraining-duration-study'
+
+  early_stopping:
+    enabled: true
+    patience: 10
+    divergence_threshold: 10.0
+
+  checkpoint:
+    dirpath: '/lustre/hpc/pheno/inar/PolarBERT/checkpoints/pretraining_duration_study/phase1_sweep'
+    save_top_k: 1
+    monitor: 'val/loss'
+    mode: 'min'
+    save_last: true
+    save_final: false
+
+pretrained:
+  model_type: 'flash'
+  checkpoint_path: ''
+  freeze_backbone: false
