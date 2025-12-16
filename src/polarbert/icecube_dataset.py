@@ -143,6 +143,33 @@ class IceCubeDataset(IterableDataset):
                     yield (x, l), None
         return generator()
     
+    def iter_sequential(self):
+        """
+        Iterate sequentially without shuffling. Yields (batch_data, start_idx).
+
+        Unlike __iter__ which shuffles batches for training, this method processes
+        events in order, which is needed for inference with event index tracking.
+
+        Yields:
+            ((x, l), (y, c), idx) if has_labels else ((x, l), None, idx)
+            where idx is the starting index of the batch in the dataset.
+        """
+        for idx in range(self.start, self.end - self.batch_size + 1, self.batch_size):
+            x = self._unpack_features(self.x[idx:idx+self.batch_size,:])
+            l = self.l[idx:idx+self.batch_size]
+
+            if self.transform:
+                x, l = self.transform(x, l)
+
+            if self.has_labels:
+                y = self.y[idx:idx+self.batch_size]
+                c = self.c[idx:idx+self.batch_size]
+                if self.target_transform:
+                    y, c = self.target_transform(y, c)
+                yield (x, l), (y, c), idx
+            else:
+                yield (x, l), None, idx
+
     def slice(self, start, end):
         # Convert relative indices to absolute indices
         abs_start = self.start + start
