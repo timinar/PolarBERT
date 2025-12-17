@@ -1,16 +1,23 @@
 """
-Create filtered IceCube dataset with only "good" upgoing events.
+Create filtered IceCube dataset based on model predictions.
 
-Filters events where:
+Default mode (v4_upgoing - "good" events):
 - True neutrino is upgoing (zenith > pi/2, i.e., cos_zenith < 0)
 - Model prediction is upgoing (cos_zenith < 0)
 - Angular loss < threshold (default 10 degrees)
 
+Inverted mode (v4_hard - "hard" events):
+- All events NOT matching the above criteria
+- Useful for pretraining on hard examples
+
 Creates memmapped arrays compatible with IceCubeDataset.
 
 Usage:
+    # Create good events dataset (v4_upgoing)
     python scripts/create_filtered_dataset.py --threshold 10
-    python scripts/create_filtered_dataset.py --threshold 10 --dataset train
+
+    # Create hard events dataset (v4_hard)
+    python scripts/create_filtered_dataset.py --threshold 10 --invert --output_base /groups/pheno/inar/icecube_kaggle/v4_hard
 """
 
 import numpy as np
@@ -53,14 +60,19 @@ def get_dtype(dtype_spec):
     return np.dtype(dtype_spec)
 
 
-def get_filtered_indices(predictions_path: Path, threshold_deg: float) -> np.ndarray:
+def get_filtered_indices(predictions_path: Path, threshold_deg: float, invert: bool = False) -> np.ndarray:
     """
-    Get indices of events that pass the filter criteria.
+    Get indices of events that pass (or fail) the filter criteria.
 
-    Criteria:
+    Criteria for "good" events:
     - True upgoing (true_cos_zenith < 0)
     - Predicted upgoing (pred_cos_zenith < 0)
     - Angular loss < threshold
+
+    Args:
+        predictions_path: Path to predictions .npz file
+        threshold_deg: Angular loss threshold in degrees
+        invert: If True, return events that DON'T pass the filter (hard events)
     """
     print(f"Loading predictions from {predictions_path}")
     preds = np.load(predictions_path)
@@ -70,17 +82,27 @@ def get_filtered_indices(predictions_path: Path, threshold_deg: float) -> np.nda
     true_cos_zenith = preds['true_cos_zenith']
     event_indices = preds['event_indices']
 
-    # Filter criteria
+    # Filter criteria for "good" events
     both_upgoing = (pred_cos_zenith < 0) & (true_cos_zenith < 0)
     good_loss = angular_loss_deg < threshold_deg
-    mask = both_upgoing & good_loss
+    good_mask = both_upgoing & good_loss
+
+    # Invert if requested (for "hard" events)
+    if invert:
+        mask = ~good_mask
+        label = "hard"
+    else:
+        mask = good_mask
+        label = "good"
 
     filtered_indices = event_indices[mask]
 
     print(f"  Total events: {len(event_indices):,}")
     print(f"  Both upgoing: {np.sum(both_upgoing):,} ({100*np.mean(both_upgoing):.1f}%)")
     print(f"  Loss < {threshold_deg}°: {np.sum(good_loss):,} ({100*np.mean(good_loss):.1f}%)")
-    print(f"  Passing filter: {len(filtered_indices):,} ({100*np.mean(mask):.1f}%)")
+    print(f"  Good events: {np.sum(good_mask):,} ({100*np.mean(good_mask):.1f}%)")
+    print(f"  Hard events: {np.sum(~good_mask):,} ({100*np.mean(~good_mask):.1f}%)")
+    print(f"  Selected ({label}): {len(filtered_indices):,}")
 
     return filtered_indices
 
@@ -198,14 +220,19 @@ def main():
                         help='Base output directory')
     parser.add_argument('--chunk_size', type=int, default=100000,
                         help='Chunk size for processing')
+    parser.add_argument('--invert', action='store_true',
+                        help='Invert filter to select hard events (NOT good)')
     args = parser.parse_args()
 
     threshold = args.threshold
     output_base = Path(args.output_base)
+    invert = args.invert
 
+    dataset_type = "v4_hard (inverted)" if invert else "v4_upgoing"
     print("=" * 60)
-    print(f"Creating v4_upgoing dataset")
+    print(f"Creating {dataset_type} dataset")
     print(f"  Threshold: {threshold}°")
+    print(f"  Invert: {invert}")
     print(f"  Output base: {output_base}")
     print("=" * 60)
 
@@ -232,7 +259,7 @@ def main():
             continue
 
         # Get filtered indices
-        filtered_indices = get_filtered_indices(predictions_path, threshold)
+        filtered_indices = get_filtered_indices(predictions_path, threshold, invert=invert)
 
         if len(filtered_indices) == 0:
             print(f"  WARNING: No events pass the filter!")
