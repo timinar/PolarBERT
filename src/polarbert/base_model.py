@@ -4,6 +4,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import OneCycleLR
+import schedulefree
 from polarbert.embedding import IceCubeEmbedding
 from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
 
@@ -76,15 +77,34 @@ class SimpleTransformer(pl.LightningModule):
 
 
 def _configure_optimizers(config, parameters):
+    lr_scheduler = config['training']['lr_scheduler']
 
-    if config['training']['lr_scheduler'] == 'constant':
+    # Schedule-free optimizer - handled separately as it replaces both optimizer and scheduler
+    if lr_scheduler == 'schedule_free':
+        # Use initial_lr if available, otherwise fall back to max_lr
+        lr = float(config['training'].get('initial_lr') or config['training'].get('max_lr'))
+        warmup_steps = int(config['training'].get('warmup_steps', 0))
+        optimizer = schedulefree.AdamWScheduleFree(
+            parameters,
+            lr=lr,
+            weight_decay=float(config['training']['weight_decay']),
+            betas=(
+                float(config['training'].get('adam_beta1', 0.9)),
+                float(config['training'].get('adam_beta2', 0.999))
+            ),
+            eps=float(config['training'].get('adam_eps', 1e-8)),
+            warmup_steps=warmup_steps,
+        )
+        return optimizer  # No scheduler needed
+
+    if lr_scheduler == 'constant':
         initial_lr = float(config['training']['initial_lr'])
-    elif config['training']['lr_scheduler'] == 'onecycle':
+    elif lr_scheduler == 'onecycle':
         initial_lr = float(config['training']['max_lr']) / float(config['training']['div_factor'])
-    elif config['training']['lr_scheduler'] == 'trapezoidal':
+    elif lr_scheduler == 'trapezoidal':
         initial_lr = float(config['training']['max_lr'])
     else:
-        raise ValueError(f"Unknown scheduler: {config['training']['lr_scheduler']}")
+        raise ValueError(f"Unknown scheduler: {lr_scheduler}")
     
     optimizer = torch.optim.AdamW(
         parameters,
@@ -100,9 +120,9 @@ def _configure_optimizers(config, parameters):
 
     # FIXME: the code below is completely redundant with some code in flash_model.py. Needs to be factored out
     total_steps = config['training'].get('total_steps')
-    if config['training']['lr_scheduler'] == 'constant':
+    if lr_scheduler == 'constant':
         return optimizer
-    elif config['training']['lr_scheduler'] == 'onecycle':
+    elif lr_scheduler == 'onecycle':
         if total_steps is None:
             raise ValueError("total_steps must be specified in config for onecycle scheduler")
         # Use the pre-calculated total_steps from config
@@ -116,7 +136,7 @@ def _configure_optimizers(config, parameters):
             anneal_strategy='cos'
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
-    elif config['training']['lr_scheduler'] == 'trapezoidal':
+    elif lr_scheduler == 'trapezoidal':
         if total_steps is None:
             raise ValueError("total_steps must be specified in config for trapezoidal scheduler")
         scheduler = TrapezoidalLR(
@@ -127,4 +147,4 @@ def _configure_optimizers(config, parameters):
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
     else:
-        assert False, f"Unknown scheduler: {config['training']['lr_scheduler']}"
+        assert False, f"Unknown scheduler: {lr_scheduler}"

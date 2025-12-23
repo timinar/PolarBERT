@@ -246,6 +246,7 @@ def main():
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     parser.add_argument("--continue_finetuning", action="store_true", help="Continue fine-tuning from a full model checkpoint (backbone + head)")
+    parser.add_argument("--schedule-free", action="store_true", help="Use schedule-free optimizer (overrides config lr_scheduler)")
     args = parser.parse_args()
 
     if args.dataset_type == 'kaggle' and args.task != 'direction':
@@ -253,7 +254,12 @@ def main():
 
     # Load and process config
     config = load_and_process_config(args.config)
-    
+
+    # Apply schedule-free if requested via CLI
+    if args.schedule_free:
+        config['training']['lr_scheduler'] = 'schedule_free'
+        config['training']['schedule_free'] = True
+
     # Setup model name
     suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')
     model_name = f"{args.name or config['model']['model_name'] or 'finetuned'}_{suffix}"

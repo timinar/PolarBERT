@@ -26,6 +26,7 @@ dependencies = [
     "tqdm",
     "pyyaml",
     "wandb",
+    "schedulefree>=1.0.0",
 ]
 
 [project.urls]

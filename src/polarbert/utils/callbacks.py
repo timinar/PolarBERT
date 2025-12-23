@@ -6,6 +6,33 @@ from pathlib import Path
 from polarbert.utils.coordinate_checking import CoordinateCheckingCallback
 
 
+class ScheduleFreeOptimizerCallback(pl.Callback):
+    """Callback to handle train/eval mode of Schedule-Free optimizer.
+
+    Schedule-free optimizers require switching between train() and eval() modes
+    to properly interpolate between iterate and averaged parameters.
+    """
+    def on_train_start(self, trainer, pl_module):
+        optimizer = pl_module.optimizers()
+        if hasattr(optimizer, 'train'):
+            optimizer.train()
+
+    def on_validation_start(self, trainer, pl_module):
+        optimizer = pl_module.optimizers()
+        if hasattr(optimizer, 'eval'):
+            optimizer.eval()
+
+    def on_validation_end(self, trainer, pl_module):
+        optimizer = pl_module.optimizers()
+        if hasattr(optimizer, 'train'):
+            optimizer.train()
+
+    def on_test_start(self, trainer, pl_module):
+        optimizer = pl_module.optimizers()
+        if hasattr(optimizer, 'eval'):
+            optimizer.eval()
+
+
 def setup_callbacks(config: dict[str, Any], model_name: str) -> list:
     callbacks: list = [LearningRateMonitor(logging_interval='step')]
     
@@ -64,5 +91,8 @@ def setup_callbacks(config: dict[str, Any], model_name: str) -> list:
     if 'mup' in config['training'] and config['training']['mup'].get('check_coordinates', False):
         coordinate_checking_callback = CoordinateCheckingCallback(checkpoint_dir)
         callbacks.append(coordinate_checking_callback)
+
+    if config['training'].get('schedule_free', False):
+        callbacks.append(ScheduleFreeOptimizerCallback())
 
     return callbacks
