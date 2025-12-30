@@ -25,10 +25,17 @@ from polarbert.utils.sweep_params import update_config_for_wandb_sweep
 
 from polarbert.pretraining import MODEL_CLASSES
 
-from polarbert.base_model import _configure_optimizers
+from polarbert.base_model import _configure_optimizers, _configure_optimizers_completep
 from polarbert.embedding import IceCubeEmbedding
 from polarbert.flash_model import TransformerBlock
 from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
+from polarbert.completep import (
+    is_completep_enabled,
+    get_completep_config,
+    compute_multipliers,
+    get_init_std,
+    log_completep_info
+)
 
 
 class SimpleTransformerCls(pl.LightningModule):
@@ -36,26 +43,61 @@ class SimpleTransformerCls(pl.LightningModule):
         super().__init__()
         self.config = config
         self.embedding = IceCubeEmbedding(config, masking=False)
-        
+
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
-        
+
         # Optional final LayerNorm (for compatibility with muP-trained models)
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
         if self.use_final_layer_norm:
             self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
 
+        # CompleteP initialization
+        if is_completep_enabled(config):
+            self._init_completep_weights()
+
     def forward(self, x):
         embeddings, padding_mask, _ = self.embedding(x)
-        
+
         for block in self.transformer_blocks:
             embeddings = block(embeddings, padding_mask)
-        
+
         if self.use_final_layer_norm:
             embeddings = self.final_layer_norm(embeddings)
-        
+
         return embeddings[:, 0, :]  # Return CLS token
+
+    def _init_completep_weights(self):
+        """Initialize weights according to CompleteP parameterization."""
+        std_input = get_init_std(self.config, 'input_embedding')
+        std_hidden = get_init_std(self.config, 'hidden')
+
+        for name, param in self.named_parameters():
+            # Input embeddings: fixed variance
+            if 'embedding.dom_embedding' in name or 'embedding.features_embedding' in name:
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std_input)
+            elif 'embedding.position_embedding' in name:
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std_input)
+            elif 'embedding.cls_embedding' in name:
+                nn.init.normal_(param, mean=0.0, std=std_input)
+
+            # Hidden weights (Q, K, V, W_O, FF)
+            elif any(s in name for s in ['wq.weight', 'wk.weight', 'wv.weight', 'wo.weight',
+                                          'feed_forward.0.weight', 'feed_forward.2.weight']):
+                nn.init.normal_(param, mean=0.0, std=std_hidden)
+
+            # Biases: zero init
+            elif param.dim() == 1 and 'weight' not in name:
+                nn.init.zeros_(param)
+
+        # LayerNorm: standard init (weight=1, bias=0)
+        for module in self.modules():
+            if isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
     
 
 class PredictionHead(pl.LightningModule):
@@ -65,6 +107,7 @@ class PredictionHead(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=['pretrained_model'])
         self.config = config
+        self._lr_scales = None  # For CompleteP per-group LR scaling
         # Initialize a new pretrained model if none is provided
         self.pretrained_model = pretrained_model or SimpleTransformerCls(config)
         if config.get('pretrained', {}).get('freeze_backbone', False):
@@ -78,7 +121,7 @@ class PredictionHead(pl.LightningModule):
     @abstractmethod
     def shared_step(self, batch, batch_idx):
         pass
-    
+
     def training_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
         self.log('train/loss', loss, prog_bar=True)
@@ -88,21 +131,49 @@ class PredictionHead(pl.LightningModule):
         loss = self.shared_step(batch, batch_idx)
         self.log('val/loss', loss, prog_bar=True)
         return loss
-    
+
     def configure_optimizers(self):
+        if is_completep_enabled(self.config):
+            optimizer, lr_scales, scheduler_dict = _configure_optimizers_completep(
+                self.config, self.named_parameters()
+            )
+            self._lr_scales = lr_scales
+            if scheduler_dict is None:
+                return optimizer
+            return [optimizer], [scheduler_dict]
         return _configure_optimizers(self.config, self.parameters())
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
+        """Apply CompleteP per-group LR scaling before optimizer step."""
+        if self._lr_scales is not None:
+            # Store current learning rates (as set by the scheduler)
+            current_lrs = [param_group['lr'] for param_group in optimizer.param_groups]
+            # Apply the proper learning scaling to each parameter group
+            for param_group, lr_scale in zip(optimizer.param_groups, self._lr_scales):
+                param_group['lr'] *= lr_scale
+            # Call the parent optimizer step
+            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+            # Restore the original learning rates (without scaling)
+            for param_group, original_lr in zip(optimizer.param_groups, current_lrs):
+                param_group['lr'] = original_lr
+        else:
+            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
 
 
 class DirectionalHead(PredictionHead):
     """Head for directional prediction task."""
     def __init__(self, config: Dict[str, Any], pretrained_model: Optional[nn.Module] = None):
         super().__init__(config, pretrained_model)
-        
+
         # Directional prediction layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
         # TODO: allow for different activation functions
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 3)
+
+        # CompleteP readout initialization
+        if is_completep_enabled(config):
+            self._init_completep_readout()
 
     def forward(self, inp):
         # Handle the input tuple and get CLS embedding
@@ -135,6 +206,14 @@ class DirectionalHead(PredictionHead):
     @staticmethod
     def target_transform_kaggle(y, c):
         return y.astype(np.float32), c.astype(np.float32)
+
+    def _init_completep_readout(self):
+        """Initialize readout weights according to CompleteP parameterization."""
+        std_readout = get_init_std(self.config, 'readout')
+        nn.init.normal_(self.fc1.weight, mean=0.0, std=std_readout)
+        nn.init.normal_(self.fc2.weight, mean=0.0, std=std_readout)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
 
 
 class EnergyRegressionHead(PredictionHead):
@@ -177,11 +256,22 @@ class EnergyRegressionHead(PredictionHead):
 
 def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
+    # Validate CompleteP usage - only allowed for training from scratch
+    checkpoint_path = config['pretrained']['checkpoint_path'].strip().lower()
+    if is_completep_enabled(config) and checkpoint_path != 'new':
+        raise ValueError(
+            "CompleteP can only be used for training from scratch. "
+            "Set pretrained.checkpoint_path to 'new' or disable completep.enabled. "
+            f"Current checkpoint_path: {config['pretrained']['checkpoint_path']}"
+        )
+
     # Initialize new model for finetuning
     model = SimpleTransformerCls(config)
 
-    if config['pretrained']['checkpoint_path'].strip().lower() == 'new':
+    if checkpoint_path == 'new':
         print("Training from scratch")
+        if is_completep_enabled(config):
+            log_completep_info(config)
         return model
 
     # Load pretrained weights from the full model

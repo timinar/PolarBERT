@@ -4,6 +4,7 @@ from polarbert.base_model import SimpleTransformer
 from torch.optim.lr_scheduler import OneCycleLR
 import inspect
 from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
+from polarbert.completep import is_completep_enabled, get_residual_scale
 
 
 def _is_mup_enabled(config: dict) -> bool:
@@ -17,6 +18,7 @@ class Attention(nn.Module):
         self.dim = config['model']['embedding_dim']
         self.head_dim = self.dim // self.n_heads
         self.is_mup_enabled = _is_mup_enabled(config)
+        self.is_completep_enabled = is_completep_enabled(config)
         self.wq = nn.Linear(self.dim, self.n_heads * self.head_dim, bias=False)
         self.wk = nn.Linear(self.dim, self.n_heads * self.head_dim, bias=False)
         self.wv = nn.Linear(self.dim, self.n_heads * self.head_dim, bias=False)
@@ -41,7 +43,8 @@ class Attention(nn.Module):
         attn_mask = padding_mask.logical_not().unsqueeze(1).unsqueeze(2)  # (bsz, 1, 1, seqlen)
         
         # Attention scaling factor
-        if self.is_mup_enabled:
+        # CompleteP and muP both use 1/d_head scaling instead of 1/sqrt(d_head)
+        if self.is_mup_enabled or self.is_completep_enabled:
             attention_scale = 1.0 / xk.size(-1)
         else:
             attention_scale = 1.0 / xk.size(-1)**0.5
@@ -73,15 +76,20 @@ class TransformerBlock(nn.Module):
         self.layer_norm1 = nn.LayerNorm(config['model']['embedding_dim'])
         self.layer_norm2 = nn.LayerNorm(config['model']['embedding_dim'])
 
+        # CompleteP residual scaling: 1/m_L for alpha=1
+        self.residual_scale = 1.0
+        if is_completep_enabled(config):
+            self.residual_scale = get_residual_scale(config)
+
     def forward(self, x, padding_mask):
-        # Attention block
+        # Attention block with residual scaling
         attn_output = self.attention(self.layer_norm1(x), padding_mask)
-        x = x + attn_output
-        
-        # Feed-forward block
+        x = x + self.residual_scale * attn_output
+
+        # Feed-forward block with residual scaling
         ff_output = self.feed_forward(self.layer_norm2(x))
-        x = x + ff_output
-        
+        x = x + self.residual_scale * ff_output
+
         return x
 
 

@@ -7,6 +7,15 @@ from torch.optim.lr_scheduler import OneCycleLR
 import schedulefree
 from polarbert.embedding import IceCubeEmbedding
 from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
+from polarbert.completep import (
+    is_completep_enabled,
+    get_completep_config,
+    compute_multipliers,
+    get_lr_scale,
+    get_eps_scale,
+    classify_parameter,
+    log_completep_info
+)
 
 
 class SimpleTransformer(pl.LightningModule):
@@ -148,3 +157,109 @@ def _configure_optimizers(config, parameters):
         return [optimizer], [{"scheduler": scheduler, "interval": "step", "frequency": 1}]
     else:
         assert False, f"Unknown scheduler: {lr_scheduler}"
+
+
+def _configure_optimizers_completep(config, named_parameters):
+    """
+    Configure optimizer with CompleteP per-parameter-group scaling.
+
+    CompleteP uses different LR and epsilon scales for different parameter groups:
+    - Input Embedding: LR/m_N, eps/m_N
+    - Hidden Weights: LR/m_N, eps/(m_N*m_L)
+    - Biases/Norms: LR (fixed), eps/(m_N*m_L)
+    - Readout: LR/m_N, eps/m_N
+
+    Returns:
+        Tuple of (optimizer, lr_scales) where lr_scales should be stored
+        for use in optimizer_step() when using LR schedulers.
+    """
+    log_completep_info(config)
+
+    cp_config = get_completep_config(config)
+    lr_base = float(cp_config['lr_base'])
+    eps_base = float(cp_config['eps_base'])
+    weight_decay = float(config['training']['weight_decay'])
+
+    # Group parameters by CompleteP category
+    param_groups = {
+        'input_embedding': [],
+        'hidden': [],
+        'biases_norms': [],
+        'readout': [],
+    }
+
+    for name, param in named_parameters:
+        if not param.requires_grad:
+            continue
+        group = classify_parameter(name, param)
+        param_groups[group].append(param)
+
+    # Build optimizer groups with per-group LR and epsilon
+    # Note: LR scales are relative to lr_base, applied via optimizer_step()
+    optim_groups = []
+    lr_scales = []
+
+    for group_name in ['input_embedding', 'hidden', 'biases_norms', 'readout']:
+        params = param_groups[group_name]
+        if not params:
+            continue
+
+        lr_scale = get_lr_scale(config, group_name)
+        eps_scale = get_eps_scale(config, group_name)
+
+        # No weight decay for biases and norms
+        wd = 0.0 if group_name == 'biases_norms' else weight_decay
+
+        optim_groups.append({
+            'params': params,
+            'weight_decay': wd,
+            'eps': eps_base * eps_scale,
+        })
+        lr_scales.append(lr_scale)
+
+        # Log group info
+        num_params = sum(p.numel() for p in params)
+        print(f"CompleteP {group_name:20s}: {num_params:10d} params, "
+              f"lr_scale={lr_scale:.4f}, eps={eps_base * eps_scale:.2e}, wd={wd}")
+
+    # Create optimizer with base LR (scaling applied via optimizer_step)
+    optimizer = torch.optim.AdamW(
+        optim_groups,
+        lr=lr_base,
+        betas=(
+            float(config['training'].get('adam_beta1', 0.9)),
+            float(config['training'].get('adam_beta2', 0.999))
+        ),
+    )
+
+    # Handle LR scheduler
+    lr_scheduler = config['training']['lr_scheduler']
+    total_steps = config['training'].get('total_steps')
+
+    if lr_scheduler == 'constant':
+        return optimizer, lr_scales, None
+    elif lr_scheduler == 'onecycle':
+        if total_steps is None:
+            raise ValueError("total_steps must be specified in config for onecycle scheduler")
+        scheduler = OneCycleLR(
+            optimizer,
+            max_lr=lr_base,
+            total_steps=total_steps,
+            pct_start=float(config['training'].get('pct_start', 0.01)),
+            div_factor=float(config['training'].get('div_factor', 25.0)),
+            final_div_factor=float(config['training'].get('final_div_factor', 10)),
+            anneal_strategy='cos'
+        )
+        return optimizer, lr_scales, {"scheduler": scheduler, "interval": "step", "frequency": 1}
+    elif lr_scheduler == 'trapezoidal':
+        if total_steps is None:
+            raise ValueError("total_steps must be specified in config for trapezoidal scheduler")
+        scheduler = TrapezoidalLR(
+            optimizer,
+            warmup_steps=config['training']['warmup_steps'],
+            decay_steps=config['training']['decay_steps'],
+            total_steps=total_steps
+        )
+        return optimizer, lr_scales, {"scheduler": scheduler, "interval": "step", "frequency": 1}
+    else:
+        raise ValueError(f"Unknown scheduler: {lr_scheduler}")
