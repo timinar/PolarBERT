@@ -70,7 +70,7 @@ class TransformerBlock(nn.Module):
         self.attention = Attention(config)
         self.feed_forward = nn.Sequential(
             nn.Linear(config['model']['embedding_dim'], config['model']['hidden_size']),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(config['model']['hidden_size'], config['model']['embedding_dim'])
         )
         self.layer_norm1 = nn.LayerNorm(config['model']['embedding_dim'])

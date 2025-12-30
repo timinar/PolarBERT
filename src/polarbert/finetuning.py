@@ -167,8 +167,7 @@ class DirectionalHead(PredictionHead):
 
         # Directional prediction layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
-        # TODO: allow for different activation functions
-        self.relu = nn.ReLU()
+        self.activation = nn.GELU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 3)
 
         # CompleteP readout initialization
@@ -181,7 +180,7 @@ class DirectionalHead(PredictionHead):
             cls_embed = self.pretrained_model(inp)
         
         x = self.fc1(cls_embed)
-        x = self.relu(x)
+        x = self.activation(x)
         x = self.fc2(x)
         
         # Normalize to unit vector
@@ -223,7 +222,7 @@ class EnergyRegressionHead(PredictionHead):
         
         # Energy regression layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
-        self.relu = nn.ReLU()
+        self.activation = nn.GELU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 1)
 
     def forward(self, inp):
@@ -232,7 +231,7 @@ class EnergyRegressionHead(PredictionHead):
             cls_embed = self.pretrained_model(inp)
         
         x = self.fc1(cls_embed)
-        x = self.relu(x)
+        x = self.activation(x)
         x = self.fc2(x)
         
         return x.view(-1)
