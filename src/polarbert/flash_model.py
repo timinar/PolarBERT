@@ -68,9 +68,19 @@ class TransformerBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.attention = Attention(config)
+
+        # Activation function (default: GELU)
+        activation_name = config['model'].get('activation', 'gelu').lower()
+        if activation_name == 'gelu':
+            activation = nn.GELU()
+        elif activation_name == 'relu':
+            activation = nn.ReLU()
+        else:
+            raise ValueError(f"Unknown activation: {activation_name}")
+
         self.feed_forward = nn.Sequential(
             nn.Linear(config['model']['embedding_dim'], config['model']['hidden_size']),
-            nn.GELU(),
+            activation,
             nn.Linear(config['model']['hidden_size'], config['model']['embedding_dim'])
         )
         self.layer_norm1 = nn.LayerNorm(config['model']['embedding_dim'])

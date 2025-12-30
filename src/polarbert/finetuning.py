@@ -167,7 +167,8 @@ class DirectionalHead(PredictionHead):
 
         # Directional prediction layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
-        self.activation = nn.GELU()
+        activation_name = config['model'].get('activation', 'gelu').lower()
+        self.activation = nn.GELU() if activation_name == 'gelu' else nn.ReLU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 3)
 
         # CompleteP readout initialization
@@ -222,7 +223,8 @@ class EnergyRegressionHead(PredictionHead):
         
         # Energy regression layers
         self.fc1 = nn.Linear(config['model']['embedding_dim'], config['model']['directional']['hidden_size'])
-        self.activation = nn.GELU()
+        activation_name = config['model'].get('activation', 'gelu').lower()
+        self.activation = nn.GELU() if activation_name == 'gelu' else nn.ReLU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 1)
 
     def forward(self, inp):
