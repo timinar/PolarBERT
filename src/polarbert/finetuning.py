@@ -338,7 +338,14 @@ def main():
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     parser.add_argument("--continue_finetuning", action="store_true", help="Continue fine-tuning from a full model checkpoint (backbone + head)")
     parser.add_argument("--schedule-free", action="store_true", help="Use schedule-free optimizer (overrides config lr_scheduler)")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     args = parser.parse_args()
+
+    # Set random seed for reproducibility
+    import os
+    seed = args.seed or int(os.environ.get('PL_GLOBAL_SEED', 42))
+    pl.seed_everything(seed, workers=True)
+    logging.info(f"Random seed set to {seed}")
 
     if args.dataset_type == 'kaggle' and args.task != 'direction':
         raise ValueError("Kaggle dataset only contains fine-tuning targets for directional reconstruction")

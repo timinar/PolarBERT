@@ -6,12 +6,13 @@ data:
   max_per_device_batch_size: 2048
   train_dir: '/groups/pheno/inar/icecube_kaggle/v4_upgoing/memmapped_train_16.2M_127'
   val_dir: '/groups/pheno/inar/icecube_kaggle/v4_upgoing/memmapped_eval_150k_127'
-  train_events: 100000  # T_base
-  val_events: 50000  # Smaller for faster validation
+  train_events: 10000000  # 10M events
+  val_events: 50000
   pin_memory: false
   num_workers: 1
   persistent_workers: true
   sensor_geometry_path: '/groups/pheno/inar/icecube_kaggle/sensor_geometry.csv'
+  shuffle_seed: 1337
 
 model:
   use_dom_positions: true
@@ -22,6 +23,7 @@ model:
   num_layers: 2         # L_base
   lambda_charge: 1.0
   use_final_layer_norm: true
+  activation: gelu
   directional:
     hidden_size: 1024
   model_name: 'completep_base_A'
@@ -29,9 +31,9 @@ model:
 training:
   mask_prob: 0.25
   val_mask_prob: 0.25
-  max_epochs: 100
+  max_epochs: 5
   logical_batch_size: 2048
-  val_check_interval: 1.0  # Once per epoch for small datasets
+  val_check_interval: 0.1  # 10 validations per epoch
   gpus: 1
   precision: "16-mixed"
   gradient_clip_val: 1.0
@@ -41,7 +43,7 @@ training:
     enabled: true
     n_base: 256         # Base embedding dimension
     l_base: 2           # Base number of layers
-    t_base: 100000      # Base training duration (events)
+    t_base: 10000000    # Match training events (no duration scaling)
     init_std_base: 0.02 # Base initialization std
     lr_base: 3e-4       # Base LR (to be tuned)
     eps_base: 1e-8      # Base Adam epsilon
@@ -55,9 +57,9 @@ training:
   weight_decay: 0.1
   amsgrad: false
 
-  pct_start: 0.01
+  pct_start: 0.05
   div_factor: 25.0
-  final_div_factor: 10
+  final_div_factor: 1
 
   steps_per_epoch: null
   total_steps: null

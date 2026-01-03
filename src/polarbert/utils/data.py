@@ -35,12 +35,16 @@ def get_dataloaders(
         from polarbert.icecube_dataset import IceCubeDataset
     else:
         assert False, f"Unknown dataset type: {dataset_type}"
-    
+
+    # Optional shuffle seed for reproducible data ordering
+    shuffle_seed = config['data'].get('shuffle_seed', None)
+
     full_dataset = IceCubeDataset(
         data_dir=config['data']['train_dir'],
         batch_size=override_batch_size if override_batch_size is not None else config['training']['per_device_batch_size'],
         transform=transform,
-        target_transform=target_transform
+        target_transform=target_transform,
+        shuffle_seed=shuffle_seed
     )
     train_events = config['data'].get('train_events', None)
     val_events = config['data'].get('val_events', None)

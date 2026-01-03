@@ -6,6 +6,26 @@ from pathlib import Path
 from polarbert.utils.coordinate_checking import CoordinateCheckingCallback
 
 
+class BestValLossCallback(pl.Callback):
+    """Tracks and logs the best validation loss to W&B."""
+    def __init__(self):
+        self.best_val_loss = float('inf')
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        val_loss = trainer.callback_metrics.get('val/loss')
+        if val_loss is not None:
+            val_loss_value = val_loss.item() if hasattr(val_loss, 'item') else float(val_loss)
+            if val_loss_value < self.best_val_loss:
+                self.best_val_loss = val_loss_value
+            # Log during epoch end (allowed hook for logging)
+            pl_module.log('val/best_loss', self.best_val_loss, prog_bar=False, sync_dist=True)
+
+    def on_fit_end(self, trainer, pl_module):
+        # Log final best loss directly to W&B to ensure it's in summary
+        if trainer.logger:
+            trainer.logger.log_metrics({'val/best_loss_final': self.best_val_loss})
+
+
 class ScheduleFreeOptimizerCallback(pl.Callback):
     """Callback to handle train/eval mode of Schedule-Free optimizer.
 
@@ -34,7 +54,10 @@ class ScheduleFreeOptimizerCallback(pl.Callback):
 
 
 def setup_callbacks(config: dict[str, Any], model_name: str) -> list:
-    callbacks: list = [LearningRateMonitor(logging_interval='step')]
+    callbacks: list = [
+        LearningRateMonitor(logging_interval='step'),
+        BestValLossCallback(),
+    ]
     
     # Get checkpoint config with defaults
     checkpoint_config = config['training'].get('checkpoint', {})

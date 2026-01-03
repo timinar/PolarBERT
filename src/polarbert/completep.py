@@ -200,8 +200,8 @@ def classify_parameter(name: str, param) -> str:
                                 'feed_forward.0.weight', 'feed_forward.2.weight']):
         return 'hidden'
 
-    # LayerNorms and biases
-    if 'layer_norm' in name or 'final_layer_norm' in name:
+    # LayerNorms and biases (including QK Norm)
+    if 'layer_norm' in name or 'final_layer_norm' in name or 'q_norm' in name or 'k_norm' in name:
         return 'biases_norms'
 
     # Any remaining 1D tensors (biases) go to biases_norms

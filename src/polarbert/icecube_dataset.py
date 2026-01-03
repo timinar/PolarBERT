@@ -39,12 +39,14 @@ class IceCubeDataset(IterableDataset):
             features = x['features']  # Shape: (batch_size, seq_length, 3)
             dom_ids = x['dom_id']     # Shape: (batch_size, seq_length)
     """
-    def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None):
+    def __init__(self, data_dir: str, batch_size: int, start=0, end=None, transform=None, target_transform=None, shuffle_seed=None):
         # target_transform is optional for Kaggle dataset (unlike Prometheus)
-        
+
         self.batch_size = batch_size
         self.transform = transform
         self.target_transform = target_transform
+        self.shuffle_seed = shuffle_seed
+        self._epoch_counter = 0
         
         for filename in ['x.npy', 'l.npy', 'c.npy', 'memmap_properties.json']:
             if not os.path.isfile(os.path.join(data_dir, filename)):
@@ -120,10 +122,16 @@ class IceCubeDataset(IterableDataset):
     def __iter__(self):
         def generator():
             Nevents = self.x.shape[0]
-            rand_int = np.random.randint(0, self.batch_size)
+            # Use local RandomState if shuffle_seed is set (for reproducibility)
+            if self.shuffle_seed is not None:
+                rng = np.random.RandomState(self.shuffle_seed + self._epoch_counter)
+                self._epoch_counter += 1
+            else:
+                rng = np.random
+            rand_int = rng.randint(0, self.batch_size)
             batch_start_indices = np.arange(Nevents)[
                 self.start + rand_int : self.end - self.batch_size + 1 : self.batch_size]
-            np.random.shuffle(batch_start_indices)
+            rng.shuffle(batch_start_indices)
             for idx in batch_start_indices:
                 assert(idx >= self.start)
                 assert(idx + self.batch_size <= self.end)
@@ -191,4 +199,5 @@ class IceCubeDataset(IterableDataset):
         slc = copy.copy(self) # Shallow copy
         slc.start = abs_start
         slc.end = abs_end
+        slc._epoch_counter = 0  # Reset epoch counter for sliced copy
         return slc

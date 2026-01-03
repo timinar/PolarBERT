@@ -24,6 +24,13 @@ class Attention(nn.Module):
         self.wv = nn.Linear(self.dim, self.n_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(self.n_heads * self.head_dim, self.dim, bias=False)
 
+        # QK Norm: Apply LayerNorm to Q and K for CompleteP stability
+        # This prevents attention logits from growing with depth/width
+        self.use_qk_norm = config['model'].get('use_qk_norm', False) or self.is_completep_enabled
+        if self.use_qk_norm:
+            self.q_norm = nn.LayerNorm(self.head_dim)
+            self.k_norm = nn.LayerNorm(self.head_dim)
+
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
         bsz, seqlen, _ = x.shape
         
@@ -34,7 +41,12 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seqlen, self.n_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_heads, self.head_dim)
-        
+
+        # QK Norm: Normalize Q and K per-head before attention
+        if self.use_qk_norm:
+            xq = self.q_norm(xq)
+            xk = self.k_norm(xk)
+
         # Transpose: (bsz, n_heads, seqlen, head_dim)
         xq, xk, xv = xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2)
         
