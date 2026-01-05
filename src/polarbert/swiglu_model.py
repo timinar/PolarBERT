@@ -50,8 +50,8 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attention = Attention(config)
         self.feed_forward = SwiGLU(config)
-        self.layer_norm1 = nn.LayerNorm(config['model']['embedding_dim'])
-        self.layer_norm2 = nn.LayerNorm(config['model']['embedding_dim'])
+        self.layer_norm1 = nn.RMSNorm(config['model']['embedding_dim'])
+        self.layer_norm2 = nn.RMSNorm(config['model']['embedding_dim'])
 
     def forward(self, x, padding_mask):
         # Attention block

@@ -5,6 +5,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 import inspect
 from polarbert.utils.custom_lr_scheduler import TrapezoidalLR
 from polarbert.completep import is_completep_enabled, get_residual_scale
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 def _is_mup_enabled(config: dict) -> bool:
@@ -24,12 +25,14 @@ class Attention(nn.Module):
         self.wv = nn.Linear(self.dim, self.n_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(self.n_heads * self.head_dim, self.dim, bias=False)
 
-        # QK Norm: Apply LayerNorm to Q and K for CompleteP stability
+        # QK Norm: Apply RMSNorm to Q and K for CompleteP stability
         # This prevents attention logits from growing with depth/width
-        self.use_qk_norm = config['model'].get('use_qk_norm', False) or self.is_completep_enabled
+        # RMSNorm is 5x faster than LayerNorm for this use case
+        # Default to True when CompleteP is enabled, but can be overridden via config
+        self.use_qk_norm = config['model'].get('use_qk_norm', self.is_completep_enabled)
         if self.use_qk_norm:
-            self.q_norm = nn.LayerNorm(self.head_dim)
-            self.k_norm = nn.LayerNorm(self.head_dim)
+            self.q_norm = nn.RMSNorm(self.head_dim)
+            self.k_norm = nn.RMSNorm(self.head_dim)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
         bsz, seqlen, _ = x.shape
@@ -48,23 +51,28 @@ class Attention(nn.Module):
             xk = self.k_norm(xk)
 
         # Transpose: (bsz, n_heads, seqlen, head_dim)
-        xq, xk, xv = xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2)
-        
+        xq = xq.transpose(1, 2)
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
+
         # Create attention mask from padding mask
         # Notice different logic for padding mask!
         attn_mask = padding_mask.logical_not().unsqueeze(1).unsqueeze(2)  # (bsz, 1, 1, seqlen)
-        
+
         # Attention scaling factor
         # CompleteP and muP both use 1/d_head scaling instead of 1/sqrt(d_head)
         if self.is_mup_enabled or self.is_completep_enabled:
             attention_scale = 1.0 / xk.size(-1)
         else:
             attention_scale = 1.0 / xk.size(-1)**0.5
-        
+
         # Flash attention (non-causal)
-        output = torch.nn.functional.scaled_dot_product_attention(
-            xq, xk, xv, attn_mask=attn_mask, is_causal=False, scale=attention_scale
-        )
+        # Force EFFICIENT_ATTENTION (xFormers) to avoid cuDNN stride issues with QK Norm
+        # FLASH_ATTENTION doesn't support non-null attn_mask
+        with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+            output = torch.nn.functional.scaled_dot_product_attention(
+                xq, xk, xv, attn_mask=attn_mask, is_causal=False, scale=attention_scale
+            )
         
         # Reshape: (bsz, seqlen, dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
@@ -95,8 +103,8 @@ class TransformerBlock(nn.Module):
             activation,
             nn.Linear(config['model']['hidden_size'], config['model']['embedding_dim'])
         )
-        self.layer_norm1 = nn.LayerNorm(config['model']['embedding_dim'])
-        self.layer_norm2 = nn.LayerNorm(config['model']['embedding_dim'])
+        self.layer_norm1 = nn.RMSNorm(config['model']['embedding_dim'])
+        self.layer_norm2 = nn.RMSNorm(config['model']['embedding_dim'])
 
         # CompleteP residual scaling: 1/m_L for alpha=1
         self.residual_scale = 1.0
@@ -126,11 +134,15 @@ class FlashTransformer(SimpleTransformer):
         self.transformer_blocks = nn.ModuleList([
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
-        
-        # Optional final LayerNorm (can be disabled for ablation experiments)
+
+        # Log QK Norm status
+        use_qk_norm = self.transformer_blocks[0].attention.use_qk_norm
+        print(f"FlashTransformer: QK Norm = {use_qk_norm}, CompleteP = {is_completep_enabled(config)}")
+
+        # Optional final RMSNorm (can be disabled for ablation experiments)
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
         if self.use_final_layer_norm:
-            self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
+            self.final_layer_norm = nn.RMSNorm(config['model']['embedding_dim'])
 
         # Initialise weights for muP
         if self.is_mup_enabled:

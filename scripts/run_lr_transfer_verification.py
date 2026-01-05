@@ -45,6 +45,9 @@ def run_experiment(base_config_path: Path, lr: float, model_tag: str, seed: int)
     config['training']['max_lr'] = lr
     config['training']['completep']['lr_base'] = lr
 
+    # Enable torch.compile for faster training with RMSNorm/QK Norm
+    config['training']['torch_compile'] = True
+
     # Create run name
     timestamp = datetime.now().strftime('%H%M%S')
     lr_str = f"{lr:.0e}".replace('-', 'm').replace('+', 'p')

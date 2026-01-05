@@ -48,10 +48,14 @@ class SimpleTransformerCls(pl.LightningModule):
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
 
-        # Optional final LayerNorm (for compatibility with muP-trained models)
+        # Log QK Norm status
+        use_qk_norm = self.transformer_blocks[0].attention.use_qk_norm
+        print(f"SimpleTransformerCls: QK Norm = {use_qk_norm}, CompleteP = {is_completep_enabled(config)}")
+
+        # Optional final RMSNorm (for compatibility with muP-trained models)
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
         if self.use_final_layer_norm:
-            self.final_layer_norm = nn.LayerNorm(config['model']['embedding_dim'])
+            self.final_layer_norm = nn.RMSNorm(config['model']['embedding_dim'])
 
         # CompleteP initialization
         if is_completep_enabled(config):
@@ -93,11 +97,10 @@ class SimpleTransformerCls(pl.LightningModule):
             elif param.dim() == 1 and 'weight' not in name:
                 nn.init.zeros_(param)
 
-        # LayerNorm: standard init (weight=1, bias=0)
+        # RMSNorm: standard init (weight=1)
         for module in self.modules():
-            if isinstance(module, nn.LayerNorm):
+            if isinstance(module, nn.RMSNorm):
                 nn.init.ones_(module.weight)
-                nn.init.zeros_(module.bias)
     
 
 class PredictionHead(pl.LightningModule):
@@ -405,6 +408,12 @@ def main():
             model = EnergyRegressionHead(config, pretrained_model)
         else:
             raise ValueError(f'Unsupported task: {args.task}')
+
+    # Optional torch.compile for faster training (especially with QK Norm)
+    if config['training'].get('torch_compile', False):
+        print("Compiling model with torch.compile...")
+        model.pretrained_model = torch.compile(model.pretrained_model)
+        print("Model compiled successfully")
 
     # Select the right target transform based on the dataset type
     if args.dataset_type == 'kaggle':
