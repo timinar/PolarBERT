@@ -8,6 +8,45 @@ from polarbert.completep import is_completep_enabled, get_residual_scale
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
+def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """
+    Apply rotary position embeddings using rotate_half style.
+
+    Args:
+        x: Input tensor of shape (bsz, seqlen, n_heads, head_dim)
+        cos: Cosine frequencies of shape (1, seqlen, 1, head_dim // 2)
+        sin: Sine frequencies of shape (1, seqlen, 1, head_dim // 2)
+
+    Returns:
+        Rotated tensor of same shape as x
+    """
+    d = x.shape[-1] // 2
+    x1, x2 = x[..., :d], x[..., d:]
+    y1 = x1 * cos + x2 * sin
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2], dim=-1)
+
+
+def precompute_freqs_cis(head_dim: int, max_seq_len: int, theta: float = 10000.0, device=None):
+    """
+    Precompute cos and sin frequencies for RoPE.
+
+    Args:
+        head_dim: Dimension of each attention head (must be even)
+        max_seq_len: Maximum sequence length to precompute
+        theta: Base for frequency computation (default: 10000.0)
+        device: Device to create tensors on
+
+    Returns:
+        Tuple of (cos, sin) tensors of shape (max_seq_len, head_dim // 2)
+    """
+    assert head_dim % 2 == 0, f"head_dim must be even, got {head_dim}"
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
+    positions = torch.arange(max_seq_len, device=device).float()
+    angles = torch.outer(positions, freqs)
+    return torch.cos(angles), torch.sin(angles)
+
+
 def _is_mup_enabled(config: dict) -> bool:
     return config['training'].get('mup', {}).get('enabled', False)
 
@@ -34,7 +73,11 @@ class Attention(nn.Module):
             self.q_norm = nn.RMSNorm(self.head_dim)
             self.k_norm = nn.RMSNorm(self.head_dim)
 
-    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
+        # RoPE: Rotary position embeddings (applied from parent, we just need the flag)
+        self.use_rope = config['model'].get('use_rope', False)
+
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor,
+                rope_cos: torch.Tensor = None, rope_sin: torch.Tensor = None):
         bsz, seqlen, _ = x.shape
         
         # QKV projections
@@ -45,7 +88,13 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.n_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_heads, self.head_dim)
 
-        # QK Norm: Normalize Q and K per-head before attention
+        # RoPE: Apply rotary position embeddings to Q and K (before QK Norm, like nanochat)
+        # cos/sin are pre-shaped (1, seqlen, 1, d//2) from FlashTransformer
+        if self.use_rope and rope_cos is not None and rope_sin is not None:
+            xq = apply_rotary_emb(xq, rope_cos, rope_sin)
+            xk = apply_rotary_emb(xk, rope_cos, rope_sin)
+
+        # QK Norm: Normalize Q and K per-head (after RoPE)
         if self.use_qk_norm:
             xq = self.q_norm(xq)
             xk = self.k_norm(xk)
@@ -111,9 +160,9 @@ class TransformerBlock(nn.Module):
         if is_completep_enabled(config):
             self.residual_scale = get_residual_scale(config)
 
-    def forward(self, x, padding_mask):
+    def forward(self, x, padding_mask, rope_cos=None, rope_sin=None):
         # Attention block with residual scaling
-        attn_output = self.attention(self.layer_norm1(x), padding_mask)
+        attn_output = self.attention(self.layer_norm1(x), padding_mask, rope_cos, rope_sin)
         x = x + self.residual_scale * attn_output
 
         # Feed-forward block with residual scaling
@@ -135,9 +184,24 @@ class FlashTransformer(SimpleTransformer):
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
 
-        # Log QK Norm status
+        # RoPE: Precompute and cache cos/sin frequencies
+        self.use_rope = config['model'].get('use_rope', False)
+        if self.use_rope:
+            self.rope_theta = config['model'].get('rope_theta', 10000.0)
+            self.rope_max_seq_len = config['model'].get('rope_max_seq_len', 512)
+            head_dim = config['model']['embedding_dim'] // config['model']['num_heads']
+            cos, sin = precompute_freqs_cis(
+                head_dim=head_dim,
+                max_seq_len=self.rope_max_seq_len,
+                theta=self.rope_theta
+            )
+            # Register as buffers so they move with the model to GPU (not saved in checkpoints)
+            self.register_buffer('rope_cos', cos, persistent=False)
+            self.register_buffer('rope_sin', sin, persistent=False)
+
+        # Log QK Norm and RoPE status
         use_qk_norm = self.transformer_blocks[0].attention.use_qk_norm
-        print(f"FlashTransformer: QK Norm = {use_qk_norm}, CompleteP = {is_completep_enabled(config)}")
+        print(f"FlashTransformer: QK Norm = {use_qk_norm}, RoPE = {self.use_rope}, CompleteP = {is_completep_enabled(config)}")
 
         # Optional final RMSNorm (can be disabled for ablation experiments)
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
@@ -169,8 +233,17 @@ class FlashTransformer(SimpleTransformer):
         if self.is_mup_enabled:
             embeddings *= self.config['training']['mup']['input_alpha']
 
+        # Slice RoPE frequencies to actual sequence length and reshape for broadcasting
+        if self.use_rope:
+            actual_seq_len = embeddings.shape[1]
+            # Shape: (seqlen, d//2) -> (1, seqlen, 1, d//2) for broadcasting with (bsz, seqlen, n_heads, head_dim)
+            rope_cos = self.rope_cos[:actual_seq_len].unsqueeze(0).unsqueeze(2)
+            rope_sin = self.rope_sin[:actual_seq_len].unsqueeze(0).unsqueeze(2)
+        else:
+            rope_cos, rope_sin = None, None
+
         for block in self.transformer_blocks:
-            embeddings = block(embeddings, padding_mask)
+            embeddings = block(embeddings, padding_mask, rope_cos, rope_sin)
 
         if self.use_final_layer_norm:
             embeddings = self.final_layer_norm(embeddings)

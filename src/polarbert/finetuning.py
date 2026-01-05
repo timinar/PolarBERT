@@ -27,7 +27,7 @@ from polarbert.pretraining import MODEL_CLASSES
 
 from polarbert.base_model import _configure_optimizers, _configure_optimizers_completep
 from polarbert.embedding import IceCubeEmbedding
-from polarbert.flash_model import TransformerBlock
+from polarbert.flash_model import TransformerBlock, precompute_freqs_cis
 from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
 from polarbert.completep import (
     is_completep_enabled,
@@ -48,9 +48,24 @@ class SimpleTransformerCls(pl.LightningModule):
             TransformerBlock(config) for _ in range(config['model']['num_layers'])
         ])
 
-        # Log QK Norm status
+        # RoPE: Precompute and cache cos/sin frequencies
+        self.use_rope = config['model'].get('use_rope', False)
+        if self.use_rope:
+            self.rope_theta = config['model'].get('rope_theta', 10000.0)
+            self.rope_max_seq_len = config['model'].get('rope_max_seq_len', 512)
+            head_dim = config['model']['embedding_dim'] // config['model']['num_heads']
+            cos, sin = precompute_freqs_cis(
+                head_dim=head_dim,
+                max_seq_len=self.rope_max_seq_len,
+                theta=self.rope_theta
+            )
+            # Register as buffers so they move with the model to GPU (not saved in checkpoints)
+            self.register_buffer('rope_cos', cos, persistent=False)
+            self.register_buffer('rope_sin', sin, persistent=False)
+
+        # Log QK Norm and RoPE status
         use_qk_norm = self.transformer_blocks[0].attention.use_qk_norm
-        print(f"SimpleTransformerCls: QK Norm = {use_qk_norm}, CompleteP = {is_completep_enabled(config)}")
+        print(f"SimpleTransformerCls: QK Norm = {use_qk_norm}, RoPE = {self.use_rope}, CompleteP = {is_completep_enabled(config)}")
 
         # Optional final RMSNorm (for compatibility with muP-trained models)
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
@@ -64,8 +79,17 @@ class SimpleTransformerCls(pl.LightningModule):
     def forward(self, x):
         embeddings, padding_mask, _ = self.embedding(x)
 
+        # Slice RoPE frequencies to actual sequence length and reshape for broadcasting
+        if self.use_rope:
+            actual_seq_len = embeddings.shape[1]
+            # Shape: (seqlen, d//2) -> (1, seqlen, 1, d//2) for broadcasting with (bsz, seqlen, n_heads, head_dim)
+            rope_cos = self.rope_cos[:actual_seq_len].unsqueeze(0).unsqueeze(2)
+            rope_sin = self.rope_sin[:actual_seq_len].unsqueeze(0).unsqueeze(2)
+        else:
+            rope_cos, rope_sin = None, None
+
         for block in self.transformer_blocks:
-            embeddings = block(embeddings, padding_mask)
+            embeddings = block(embeddings, padding_mask, rope_cos, rope_sin)
 
         if self.use_final_layer_norm:
             embeddings = self.final_layer_norm(embeddings)
