@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-CompleteP LR Transfer Verification (10M events, 5 epochs)
+CompleteP LR Transfer Verification with RoPE (10M events, 5 epochs)
 
-Tests whether optimal learning rate transfers across model sizes with CompleteP.
+Tests whether optimal learning rate transfers across model sizes with CompleteP + RoPE.
 - Base model: multiple seeds for stability verification
 - Wide/Deep models: single seed (slower training)
 """
@@ -17,8 +17,8 @@ from datetime import datetime
 PROJECT_DIR = Path("/lustre/hpc/pheno/inar/PolarBERT")
 CONFIG_DIR = PROJECT_DIR / "configs" / "completep_verification"
 
-# LR grid - focusing on promising range from div factor sweep
-LR_VALUES = [1e-4, 2e-4, 3e-4, 5e-4, 7e-4, 1e-3, 2e-3]
+# LR grid - denser around suspected optimum (5e-4 to 1e-3)
+LR_VALUES = [1e-4, 2e-4, 5e-4, 8e-4, 1e-3, 2e-3, 5e-3]
 
 # Seeds
 BASE_SEEDS = [42, 123]  # Multiple seeds for base model
@@ -44,6 +44,11 @@ def run_experiment(base_config_path: Path, lr: float, model_tag: str, seed: int)
     # Set LR
     config['training']['max_lr'] = lr
     config['training']['completep']['lr_base'] = lr
+
+    # Enable RoPE
+    config['model']['use_rope'] = True
+    config['model']['rope_theta'] = 10000.0
+    config['model']['rope_max_seq_len'] = 512
 
     # Enable torch.compile for faster training with RMSNorm/QK Norm
     config['training']['torch_compile'] = True
