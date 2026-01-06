@@ -97,29 +97,54 @@ class SimpleTransformerCls(pl.LightningModule):
         return embeddings[:, 0, :]  # Return CLS token
 
     def _init_completep_weights(self):
-        """Initialize weights according to CompleteP parameterization."""
+        """Initialize weights according to CompleteP parameterization.
+
+        Initialization rules (from CompleteP papers):
+        - Learnable tokens (CLS, mask): std = init_std_base (fixed variance)
+        - One-hot lookup (dom_embedding): std = init_std_base (fixed variance)
+        - Dense input Linear (features, position): std = init_std_base / sqrt(fan_in)
+        - Hidden weights (Q, K, V, O, FF): std = init_std_base / sqrt(m_N)
+        - Biases: zero
+        - RMSNorm: weight = 1
+
+        Note: For hidden layers, fan_in scaling is implicit via the width multiplier m_N.
+        Only input linear layers need explicit 1/sqrt(fan_in) since their fan_in is fixed.
+        """
         std_input = get_init_std(self.config, 'input_embedding')
         std_hidden = get_init_std(self.config, 'hidden')
+        # Dense input layers have fan_in=3 (xyz coordinates or features)
+        std_input_linear = get_init_std(self.config, 'input_linear', fan_in=3)
 
         for name, param in self.named_parameters():
-            # Input embeddings: fixed variance
-            if 'embedding.dom_embedding' in name or 'embedding.features_embedding' in name:
-                if param.dim() >= 2:
-                    nn.init.normal_(param, mean=0.0, std=std_input)
-            elif 'embedding.position_embedding' in name:
-                if param.dim() >= 2:
-                    nn.init.normal_(param, mean=0.0, std=std_input)
-            elif 'embedding.cls_embedding' in name:
+            # Zero all biases first (before other checks, since bias is 1D)
+            if param.dim() == 1 and 'bias' in name:
+                nn.init.zeros_(param)
+                continue
+
+            # Learnable tokens: fixed variance (no 1/sqrt(d_in) since not processing input)
+            if 'embedding.cls_embedding' in name:
+                nn.init.normal_(param, mean=0.0, std=std_input)
+            elif 'embedding.mask_token_embedding' in name:
                 nn.init.normal_(param, mean=0.0, std=std_input)
 
-            # Hidden weights (Q, K, V, W_O, FF)
+            # One-hot lookup table: fixed variance (one-hot input has no variance issue)
+            elif 'embedding.dom_embedding' in name:
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std_input)
+
+            # Dense input Linear layers: scale by 1/sqrt(fan_in) for stable signal variance
+            elif 'embedding.features_embedding' in name:
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std_input_linear)
+            elif 'embedding.position_embedding' in name:
+                if param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std_input_linear)
+
+            # Hidden weights (Q, K, V, W_O, FF): scale by 1/sqrt(m_N)
+            # fan_in scaling is implicit via width multiplier
             elif any(s in name for s in ['wq.weight', 'wk.weight', 'wv.weight', 'wo.weight',
                                           'feed_forward.0.weight', 'feed_forward.2.weight']):
                 nn.init.normal_(param, mean=0.0, std=std_hidden)
-
-            # Biases: zero init
-            elif param.dim() == 1 and 'weight' not in name:
-                nn.init.zeros_(param)
 
         # RMSNorm: standard init (weight=1)
         for module in self.modules():

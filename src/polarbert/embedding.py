@@ -20,11 +20,15 @@ class IceCubeEmbedding(nn.Module):
         num_doms = 5160
         self.masking = masking
         self.padding_idx = 0
-        self.cls_embedding = nn.Parameter(torch.randn(1, 1, embedding_dim))
-        
+
+        # Initialize embeddings with proper scale (std=0.02) for CompleteP compatibility
+        # This matches init_std_base and ensures stable training across seeds
+        init_std = config.get('training', {}).get('completep', {}).get('init_std_base', 0.02)
+        self.cls_embedding = nn.Parameter(torch.empty(1, 1, embedding_dim).normal_(mean=0.0, std=init_std))
+
         # Mask token is always a dedicated, trainable parameter if masking is enabled
         if self.masking:
-            self.mask_token_embedding = nn.Parameter(torch.randn(1, dom_embed_dim))
+            self.mask_token_embedding = nn.Parameter(torch.empty(1, dom_embed_dim).normal_(mean=0.0, std=init_std))
 
         if not self.use_dom_positions:
             # ID-based: Use padding_idx to freeze the padding embedding at zeros

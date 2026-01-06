@@ -74,7 +74,7 @@ def get_residual_scale(config: dict) -> float:
     return 1.0 / m_L
 
 
-def get_init_std(config: dict, param_type: str) -> float:
+def get_init_std(config: dict, param_type: str, fan_in: int = None) -> float:
     """
     Get initialization std for different parameter types.
 
@@ -82,19 +82,31 @@ def get_init_std(config: dict, param_type: str) -> float:
         config: Full config dict
         param_type: One of:
             - 'input_embedding': Fixed variance (CLS token, DOM embeddings, etc.)
+            - 'input_linear': Dense input layer, scaled by 1/sqrt(fan_in) (CompleteP Paper 1)
             - 'hidden': Scaled by 1/sqrt(m_N) (Q, K, V, W_O, FF weights)
             - 'readout': Scaled by 1/sqrt(m_N) (fc1, fc2 in DirectionalHead)
+        fan_in: Input dimension for 'input_linear' type (required for that type)
 
     Returns:
         Initialization standard deviation
+
+    Note:
+        For dense input layers, CompleteP Paper 1 states:
+        "If the input data is dense, then we would require a pre-factor of 1/sqrt(d_in)"
+        This keeps signal variance stable across different input dimensions.
     """
     cp_config = get_completep_config(config)
     m_N, _, _ = compute_multipliers(config)
     std_base = cp_config['init_std_base']
 
     if param_type == 'input_embedding':
-        # Fixed variance for input embeddings
+        # Fixed variance for learnable tokens and lookup tables (one-hot inputs)
         return std_base
+    elif param_type == 'input_linear':
+        # Dense input layer: scale by 1/sqrt(fan_in) to stabilize signal variance
+        if fan_in is None:
+            raise ValueError("fan_in must be provided for 'input_linear' param_type")
+        return std_base / math.sqrt(fan_in)
     elif param_type == 'hidden':
         # Scaled by 1/sqrt(m_N) for hidden weights
         return std_base / math.sqrt(m_N)
@@ -103,7 +115,7 @@ def get_init_std(config: dict, param_type: str) -> float:
         return std_base / math.sqrt(m_N)
     else:
         raise ValueError(f"Unknown param_type: {param_type}. "
-                        f"Expected one of: 'input_embedding', 'hidden', 'readout'")
+                        f"Expected one of: 'input_embedding', 'input_linear', 'hidden', 'readout'")
 
 
 def get_lr_scale(config: dict, param_group: str) -> float:
