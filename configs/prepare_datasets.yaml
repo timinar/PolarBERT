@@ -1,29 +1,28 @@
 paths:
-  data_dir: 'path/to/icecube_kaggle' #adjust the path
-  output_dir: 'path/to/icecube_kaggle/memmaped' #adjust the path
+  data_dir: 'path/to/icecube_kaggle'
+  output_dir: 'path/to/icecube_kaggle/memmapped'
+  sensor_geometry_path: 'path/to/sensor_geometry.csv'
 
 data:
   batch_size: 200000
-  seq_length: 127
-  n_features: 4
+  seq_length: 192
+  n_doms: 5160
 
-pretraining:
-  directory_name: "pretraining"
-  start_at_batch: 1
-  stop_at_batch: 500
-  include_truth: false
-  dtype: 'float16'
+splits:
+  train:
+    start_at_batch: 1
+    stop_at_batch: 650
+    include_truth: true
+    target_dtype: 'float16'
 
-validation:
-  directory_name: "validation"
-  start_at_batch: 651
-  stop_at_batch: 655
-  include_truth: true
-  dtype: 'float16'
+  eval:
+    start_at_batch: 651
+    stop_at_batch: 656
+    include_truth: true
+    target_dtype: 'float16'
 
-finetuning:
-  directory_name: "finetuning"
-  start_at_batch: 601
-  stop_at_batch: 605
-  include_truth: true
-  dtype: 'float16'
+  test:
+    start_at_batch: 657
+    stop_at_batch: 659
+    include_truth: false
+    target_dtype: 'float16'

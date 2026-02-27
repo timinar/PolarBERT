@@ -25,11 +25,15 @@ It is convenient to use the kaggle API to download the data (see the details [he
 ```bash
 kaggle competitions download -c icecube-neutrinos-in-deep-ice
 ```  
-2) Adjust the paths in the `configs/prepare_datasets.yaml` file. 
+2) Adjust the paths in `configs/prepare_datasets.yaml` (data directory, output directory, sensor geometry path).
 
 3) Run the preprocessing script:
 ```bash
-python scripts/prepare_memmaped_data.py --config_path configs/prepare_datasets.yaml
+# Process all splits (train, eval, test)
+python scripts/create_memmapped_dataset_kaggle.py --config configs/prepare_datasets.yaml
+
+# Or process a single split
+python scripts/create_memmapped_dataset_kaggle.py --config configs/prepare_datasets.yaml --split eval
 ```
 
 ## Configuration
