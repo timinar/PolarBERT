@@ -27,7 +27,9 @@ scripts/run_scaling_experiment.py
 scripts/test_seed_independence.py
 
 # Experiment-specific configs (local only)
+configs/completep_verification/
 configs/scaling_laws_angular_loss/
+configs/pretraining_duration_study/
 
 # Local docs/prompts
 docs/
