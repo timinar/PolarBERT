@@ -1,6 +1,7 @@
 checkpoints/
 wandb/
 evaluation_results/
+experiments/*
 logs/
 scripts/experiments/
 tables/
@@ -15,6 +16,21 @@ configs/*.yaml
 !configs/*.example.yaml
 !configs/prepare_datasets.yaml
 scripts/*.sh
+
+# One-off experiment scripts (only core scripts are tracked)
+scripts/plot_lr_transfer_v*.py
+scripts/plot_scaling_results.py
+scripts/run_init_ablation.py
+scripts/run_large_model.py
+scripts/run_lr_sweep_*.py
+scripts/run_scaling_experiment.py
+scripts/test_seed_independence.py
+
+# Experiment-specific configs (local only)
+configs/scaling_laws_angular_loss/
+
+# Local docs/prompts
+docs/
 
 
 # Byte-compiled / optimized / DLL files

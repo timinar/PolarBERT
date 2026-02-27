@@ -5,6 +5,7 @@
     "backup/",
     "configs/",
     "documents/",
+    "experiments/",
     "logs/",
     "src/polarbert/checkpoints/",
     "src/polarbert/wandb/",
