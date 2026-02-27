@@ -50,7 +50,7 @@ class AttentionWithCapture(nn.Module):
         xv = xv.transpose(1, 2)
 
         # Compute attention scores manually
-        scale = 1.0 / xk.size(-1) if (self.original.is_mup_enabled or self.original.is_completep_enabled) else 1.0 / xk.size(-1)**0.5
+        scale = 1.0 / xk.size(-1) if self.original.is_mup_enabled else 1.0 / xk.size(-1)**0.5
 
         attn_scores = torch.matmul(xq, xk.transpose(-2, -1)) * scale
 
