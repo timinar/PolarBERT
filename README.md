@@ -104,47 +104,6 @@ srun python -m polarbert.finetuning \
 
 
 
-## Schedule-Free Optimizer
-
-The codebase supports [schedule-free optimization](https://github.com/facebookresearch/schedule_free) as an alternative to traditional learning rate schedules.
-
-### Usage
-
-Add the `--schedule-free` flag to finetuning:
-```bash
-python -m polarbert.finetuning \
-    --config configs/finetuning.yaml \
-    --schedule-free \
-    --name my_sf_experiment
-```
-
-Or set it directly in the config:
-```yaml
-training:
-  lr_scheduler: 'schedule_free'
-```
-
-### Recommended Config Settings
-
-Based on the schedule-free paper recommendations:
-
-```yaml
-training:
-  max_lr: 0.001          # 1x-10x larger than schedule-based (try 0.0007-0.007)
-  adam_beta1: 0.9        # Default works for most. Use 0.95-0.98 for long runs
-  adam_beta2: 0.999      # Standard value
-  warmup_steps: 200      # Warmup is recommended
-  weight_decay: 0.1      # Standard value
-```
-
-**Key points:**
-- Learning rates can be 1x-10x larger than with scheduled approaches
-- For very long training runs, increase `adam_beta1` to 0.95 or 0.98
-- Warmup is recommended via `warmup_steps`
-- No learning rate scheduler is used (constant LR with built-in averaging)
-- The LR logged to WandB will appear constant even with warmup, as schedule-free applies warmup internally to the updates
-
-
 Models and Checkpoints
 Checkpoints are saved under:
 

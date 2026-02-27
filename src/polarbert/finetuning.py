@@ -25,17 +25,10 @@ from polarbert.utils.sweep_params import update_config_for_wandb_sweep
 
 from polarbert.pretraining import MODEL_CLASSES
 
-from polarbert.base_model import _configure_optimizers, _configure_optimizers_completep
+from polarbert.base_model import _configure_optimizers
 from polarbert.embedding import IceCubeEmbedding
-from polarbert.flash_model import TransformerBlock, precompute_freqs_cis
+from polarbert.flash_model import TransformerBlock, precompute_freqs_cis, _get_norm_layer
 from polarbert.loss_functions import angles_to_unit_vector, angular_dist_score_unit_vectors
-from polarbert.completep import (
-    is_completep_enabled,
-    get_completep_config,
-    compute_multipliers,
-    get_init_std,
-    log_completep_info
-)
 
 
 class SimpleTransformerCls(pl.LightningModule):
@@ -65,16 +58,12 @@ class SimpleTransformerCls(pl.LightningModule):
 
         # Log QK Norm and RoPE status
         use_qk_norm = self.transformer_blocks[0].attention.use_qk_norm
-        print(f"SimpleTransformerCls: QK Norm = {use_qk_norm}, RoPE = {self.use_rope}, CompleteP = {is_completep_enabled(config)}")
+        print(f"SimpleTransformerCls: QK Norm = {use_qk_norm}, RoPE = {self.use_rope}")
 
-        # Optional final RMSNorm (for compatibility with muP-trained models)
+        # Optional final layer norm
         self.use_final_layer_norm = config['model'].get('use_final_layer_norm', True)
         if self.use_final_layer_norm:
-            self.final_layer_norm = nn.RMSNorm(config['model']['embedding_dim'])
-
-        # CompleteP initialization
-        if is_completep_enabled(config):
-            self._init_completep_weights()
+            self.final_layer_norm = _get_norm_layer(config, config['model']['embedding_dim'])
 
     def forward(self, x):
         embeddings, padding_mask, _ = self.embedding(x)
@@ -96,61 +85,7 @@ class SimpleTransformerCls(pl.LightningModule):
 
         return embeddings[:, 0, :]  # Return CLS token
 
-    def _init_completep_weights(self):
-        """Initialize weights according to CompleteP parameterization.
 
-        Initialization rules (from CompleteP papers):
-        - Learnable tokens (CLS, mask): std = init_std_base (fixed variance)
-        - One-hot lookup (dom_embedding): std = init_std_base (fixed variance)
-        - Dense input Linear (features, position): std = init_std_base / sqrt(fan_in)
-        - Hidden weights (Q, K, V, O, FF): std = init_std_base / sqrt(m_N)
-        - Biases: zero
-        - RMSNorm: weight = 1
-
-        Note: For hidden layers, fan_in scaling is implicit via the width multiplier m_N.
-        Only input linear layers need explicit 1/sqrt(fan_in) since their fan_in is fixed.
-        """
-        std_input = get_init_std(self.config, 'input_embedding')
-        std_hidden = get_init_std(self.config, 'hidden')
-        # Dense input layers have fan_in=3 (xyz coordinates or features)
-        std_input_linear = get_init_std(self.config, 'input_linear', fan_in=3)
-
-        for name, param in self.named_parameters():
-            # Zero all biases first (before other checks, since bias is 1D)
-            if param.dim() == 1 and 'bias' in name:
-                nn.init.zeros_(param)
-                continue
-
-            # Learnable tokens: fixed variance (no 1/sqrt(d_in) since not processing input)
-            if 'embedding.cls_embedding' in name:
-                nn.init.normal_(param, mean=0.0, std=std_input)
-            elif 'embedding.mask_token_embedding' in name:
-                nn.init.normal_(param, mean=0.0, std=std_input)
-
-            # One-hot lookup table: fixed variance (one-hot input has no variance issue)
-            elif 'embedding.dom_embedding' in name:
-                if param.dim() >= 2:
-                    nn.init.normal_(param, mean=0.0, std=std_input)
-
-            # Dense input Linear layers: scale by 1/sqrt(fan_in) for stable signal variance
-            elif 'embedding.features_embedding' in name:
-                if param.dim() >= 2:
-                    nn.init.normal_(param, mean=0.0, std=std_input_linear)
-            elif 'embedding.position_embedding' in name:
-                if param.dim() >= 2:
-                    nn.init.normal_(param, mean=0.0, std=std_input_linear)
-
-            # Hidden weights (Q, K, V, W_O, FF): scale by 1/sqrt(m_N)
-            # fan_in scaling is implicit via width multiplier
-            elif any(s in name for s in ['wq.weight', 'wk.weight', 'wv.weight', 'wo.weight',
-                                          'feed_forward.0.weight', 'feed_forward.2.weight']):
-                nn.init.normal_(param, mean=0.0, std=std_hidden)
-
-        # RMSNorm: standard init (weight=1)
-        for module in self.modules():
-            if isinstance(module, nn.RMSNorm):
-                nn.init.ones_(module.weight)
-    
 
 class PredictionHead(pl.LightningModule):
     """Generic head for multiple downstream tasks."""
@@ -159,7 +94,6 @@ class PredictionHead(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=['pretrained_model'])
         self.config = config
-        self._lr_scales = None  # For CompleteP per-group LR scaling
         # Initialize a new pretrained model if none is provided
         self.pretrained_model = pretrained_model or SimpleTransformerCls(config)
         if config.get('pretrained', {}).get('freeze_backbone', False):
@@ -185,31 +119,7 @@ class PredictionHead(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        if is_completep_enabled(self.config):
-            optimizer, lr_scales, scheduler_dict = _configure_optimizers_completep(
-                self.config, self.named_parameters()
-            )
-            self._lr_scales = lr_scales
-            if scheduler_dict is None:
-                return optimizer
-            return [optimizer], [scheduler_dict]
         return _configure_optimizers(self.config, self.parameters())
-
-    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
-        """Apply CompleteP per-group LR scaling before optimizer step."""
-        if self._lr_scales is not None:
-            # Store current learning rates (as set by the scheduler)
-            current_lrs = [param_group['lr'] for param_group in optimizer.param_groups]
-            # Apply the proper learning scaling to each parameter group
-            for param_group, lr_scale in zip(optimizer.param_groups, self._lr_scales):
-                param_group['lr'] *= lr_scale
-            # Call the parent optimizer step
-            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
-            # Restore the original learning rates (without scaling)
-            for param_group, original_lr in zip(optimizer.param_groups, current_lrs):
-                param_group['lr'] = original_lr
-        else:
-            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
 
 
 class DirectionalHead(PredictionHead):
@@ -222,10 +132,6 @@ class DirectionalHead(PredictionHead):
         activation_name = config['model'].get('activation', 'gelu').lower()
         self.activation = nn.GELU() if activation_name == 'gelu' else nn.ReLU()
         self.fc2 = nn.Linear(config['model']['directional']['hidden_size'], 3)
-
-        # CompleteP readout initialization
-        if is_completep_enabled(config):
-            self._init_completep_readout()
 
     def forward(self, inp):
         # Handle the input tuple and get CLS embedding
@@ -259,13 +165,6 @@ class DirectionalHead(PredictionHead):
     def target_transform_kaggle(y, c):
         return y.astype(np.float32), c.astype(np.float32)
 
-    def _init_completep_readout(self):
-        """Initialize readout weights according to CompleteP parameterization."""
-        std_readout = get_init_std(self.config, 'readout')
-        nn.init.normal_(self.fc1.weight, mean=0.0, std=std_readout)
-        nn.init.normal_(self.fc2.weight, mean=0.0, std=std_readout)
-        nn.init.zeros_(self.fc1.bias)
-        nn.init.zeros_(self.fc2.bias)
 
 
 class EnergyRegressionHead(PredictionHead):
@@ -309,22 +208,13 @@ class EnergyRegressionHead(PredictionHead):
 
 def load_pretrained_model(config: Dict[str, Any]):
     """Load and prepare pretrained model."""
-    # Validate CompleteP usage - only allowed for training from scratch
     checkpoint_path = config['pretrained']['checkpoint_path'].strip().lower()
-    if is_completep_enabled(config) and checkpoint_path != 'new':
-        raise ValueError(
-            "CompleteP can only be used for training from scratch. "
-            "Set pretrained.checkpoint_path to 'new' or disable completep.enabled. "
-            f"Current checkpoint_path: {config['pretrained']['checkpoint_path']}"
-        )
 
     # Initialize new model for finetuning
     model = SimpleTransformerCls(config)
 
     if checkpoint_path == 'new':
         print("Training from scratch")
-        if is_completep_enabled(config):
-            log_completep_info(config)
         return model
 
     # Load pretrained weights from the full model
@@ -389,7 +279,6 @@ def main():
     parser.add_argument("--dataset_type", type=str, choices=['kaggle', 'prometheus'], default='kaggle')
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the pretrained model checkpoint. If 'new', the model will be trained from scratch.")
     parser.add_argument("--continue_finetuning", action="store_true", help="Continue fine-tuning from a full model checkpoint (backbone + head)")
-    parser.add_argument("--schedule-free", action="store_true", help="Use schedule-free optimizer (overrides config lr_scheduler)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     args = parser.parse_args()
 
@@ -404,11 +293,6 @@ def main():
 
     # Load and process config
     config = load_and_process_config(args.config)
-
-    # Apply schedule-free if requested via CLI
-    if args.schedule_free:
-        config['training']['lr_scheduler'] = 'schedule_free'
-        config['training']['schedule_free'] = True
 
     # Setup model name
     suffix = args.job_id or datetime.now().strftime('%y%m%d-%H%M%S')

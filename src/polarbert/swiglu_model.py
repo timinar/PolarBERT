@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from polarbert.base_model import SimpleTransformer
+from polarbert.flash_model import _get_norm_layer
 
 class Attention(nn.Module):
     def __init__(self, config):
@@ -50,8 +51,8 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attention = Attention(config)
         self.feed_forward = SwiGLU(config)
-        self.layer_norm1 = nn.RMSNorm(config['model']['embedding_dim'])
-        self.layer_norm2 = nn.RMSNorm(config['model']['embedding_dim'])
+        self.layer_norm1 = _get_norm_layer(config, config['model']['embedding_dim'])
+        self.layer_norm2 = _get_norm_layer(config, config['model']['embedding_dim'])
 
     def forward(self, x, padding_mask):
         # Attention block

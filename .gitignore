@@ -17,10 +17,17 @@ configs/*.yaml
 !configs/prepare_datasets.yaml
 scripts/*.sh
 
+# One-off experiment scripts (only core scripts are tracked)
+scripts/plot_lr_transfer_v*.py
+scripts/plot_scaling_results.py
+scripts/run_init_ablation.py
+scripts/run_large_model.py
+scripts/run_lr_sweep_*.py
+scripts/run_scaling_experiment.py
+scripts/test_seed_independence.py
+
 # Experiment-specific configs (local only)
-configs/completep_verification/
 configs/scaling_laws_angular_loss/
-configs/pretraining_duration_study/
 
 # Local docs/prompts
 docs/
